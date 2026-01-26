@@ -172,9 +172,9 @@ def convert_super_grid(ds_super_grid: xr.Dataset):
 def sis2_preprocessing(date, ds_grid, ds_super_grid, snapshots=True):
     """SIS2 specific preprocessing"""
     pth = '/archive/William.Gregory/fre/FMS2023.04_mom6_20231130/OM4p25_JRA55do1.5_r6_4Emulator_noleap/gfdl.ncrc5-intel23-prod/history/'    
-    mean_vars = ['SWDN','LWDN','SH','LH','FA_X','FA_Y','SNOWFL','RAIN','BHEAT','BMELT','TMELT','SSH',\
-                 'SALTF','LSRCi','LSNKi','XPRTi','LSRCc','LSNKc','XPRTc','LSRCs','LSNKs','XPRTs','UI','VI']
-    snap_vars = ['siconc','sisnthick','sithick','simass','sisnmass','TS']
+    mean_vars = ['SWDN','LWDN','SH','LH','FA_X','FA_Y','SNOWFL','BHEAT','BMELT','TMELT','SSH',\
+                 'SALTF','LSRCi','LSNKi','XPRTi','LSRCc','LSNKc','XPRTc','LSRCs','LSNKs','XPRTs']
+    snap_vars = ['siconc','simass','sisnmass','TS']
         
     if snapshots:
         ds_mean = xr.open_zarr(pth+date+'.ice_6hourly.zarr')[mean_vars]
@@ -207,6 +207,7 @@ def sis2_preprocessing(date, ds_grid, ds_super_grid, snapshots=True):
     ds_interpolated = interpolate_to_cell_centers(ds, ds.sithick, grid)
     ds_interpolated['wind_stress_x'] = stitch(ds_interpolated, 'tauuo', 'FA_X')
     ds_interpolated['wind_stress_y'] = stitch(ds_interpolated, 'tauvo', 'FA_Y')
+    ds_interpolated = ds_interpolated.drop_vars(['FA_X','FA_Y'])
 
     # remove the same areas as for the tracers again
     tracer_wetmask = ~np.isnan(ds_interpolated.sithick.isel(time=0)).drop_vars("time")
@@ -274,11 +275,6 @@ def main():
         "lat": -1, 
         "lon": -1,
     }
-    inner_chunks = {
-        "time": 1, 
-        "lat": -1, 
-        "lon": -1,
-    }
 
     ds = []
     client = Client(n_workers=2, memory_limit='225GB')
@@ -293,7 +289,7 @@ def main():
             for var in ds_sis.data_vars:
                 attrs[var] = ds_sis[var].attrs
 
-            for varname_x, varname_y in [['FA_X','FA_Y'],['tauuo','tauvo'],['wind_stress_x','wind_stress_y'],['UI','VI']]:
+            for varname_x, varname_y in [['tauuo','tauvo'],['wind_stress_x','wind_stress_y']]:
                 x_rotated, y_rotated = rotate_vectors(ds_sis[varname_x], ds_sis[varname_y], ds_sis['angle'])
                 ds_sis[varname_x] = x_rotated.astype(np.float64)
                 ds_sis[varname_y] = y_rotated.astype(np.float64)
@@ -321,13 +317,11 @@ def main():
     ds = ds.reset_coords(names=['longitude','latitude','areacello','mask_2d','land_fraction','sea_surface_fraction'])
     #ds['sea_ice_fraction'] = ds['siconc']*ds['sea_surface_fraction']
     ### the sum of all surface fractions (ds['sea_ice_fraction'] + ds['ocean_fraction'] + ds['land_fraction']) should equal 1 to within roundoff
-    ds['UI'] = xr.where(ds['siconc']>0, ds['UI'], 0)
-    ds['VI'] = xr.where(ds['siconc']>0, ds['VI'], 0)
 
     ### set up variable masks
-    ocn = ['BHEAT','SWDN','LWDN','SH','LH','wind_stress_x','wind_stress_y','RAIN','SNOWFL','tauuo','tauvo','SSH'] #mask with mask_2d
-    ice = ['FA_X','FA_Y','XPRTi','LSRCi','LSNKi','XPRTs','LSRCs','LSNKs','XPRTc','LSRCc','LSNKc','SALTF',\
-           'sithick','sisnthick','siconc','TS','BMELT','TMELT','simass','sisnmass','UI','VI'] #mask at sea ice locations
+    ocn = ['BHEAT','SWDN','LWDN','SH','LH','wind_stress_x','wind_stress_y','SNOWFL','tauuo','tauvo','SSH'] #mask with mask_2d
+    ice = ['XPRTi','LSRCi','LSNKi','XPRTs','LSRCs','LSNKs','XPRTc','LSRCc','LSNKc','SALTF',\
+           'siconc','TS','BMELT','TMELT','simass','sisnmass'] #mask at sea ice locations
 
     variables = ocn+ice
     ice_present = ds['siconc'].sum('time')
@@ -339,6 +333,8 @@ def main():
         elif variable in ocn:
             ds[variable] = ds[variable].where(ds['mask_2d']==1)
             ds['mask_'+variable] = ds['mask_2d']
+        if ds['mask_'+variable].ndim > 2:
+            ds['mask_'+variable] = ds['mask_'+variable].isel(time=0).drop_vars('time')
 
     ds = ds.chunk(outer_chunks)
     ds = ds.reset_coords()
@@ -350,6 +346,7 @@ def main():
     ds_sub = ds_sub.reindex(time=ds['time'],method='ffill').chunk({'time':360,'lon':-1,'lat':-1})
     ds_sub = ds_sub.rename({'SSH':'SSH_5d','BHEAT':'BHEAT_5d','tauuo':'tauuo_5d','tauvo':'tauvo_5d'})
     ds = xr.merge([ds,ds_sub])
+
     ds.to_zarr('1958-2022.FloeNet_6hourly_'+out_name+'_NoLeap.zarr',zarr_version=3,mode='w',encoding={var: {"compressor": None} for var in ds.data_vars})
     client.close()
     
