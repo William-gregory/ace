@@ -15,6 +15,7 @@ from fme.core.dataset_info import DatasetInfo
 from fme.core.device import get_device
 from fme.core.dicts import add_names
 from fme.core.distributed import Distributed
+from fme.core.ice import Ice, IceConfig
 from fme.core.normalizer import NetworkAndLossNormalizationConfig, StandardNormalizer
 from fme.core.ocean import Ocean, OceanConfig
 from fme.core.optimization import NullOptimization
@@ -48,6 +49,7 @@ class SingleModuleStepConfig(StepConfigABC):
         secondary_decoder: Configuration for the secondary decoder that computes
             additional diagnostic variables from outputs.
         ocean: The ocean configuration.
+        ice: The ice configuration.
         corrector: The corrector configuration.
         next_step_forcing_names: Names of forcing variables for the next timestep.
         prescribed_prognostic_names: Prognostic variable names to overwrite from
@@ -61,6 +63,7 @@ class SingleModuleStepConfig(StepConfigABC):
     normalization: NetworkAndLossNormalizationConfig
     secondary_decoder: SecondaryDecoderConfig | None = None
     ocean: OceanConfig | None = None
+    ice: IceConfig | None = None
     corrector: AtmosphereCorrectorConfig | CorrectorSelector = dataclasses.field(
         default_factory=lambda: AtmosphereCorrectorConfig()
     )
@@ -135,10 +138,18 @@ class SingleModuleStepConfig(StepConfigABC):
         Names of variables required as inputs to `step`,
         either in `input` or `next_step_input_data`.
         """
-        if self.ocean is None:
+        if (self.ocean is None) & (self.ice is None):
             return self.in_names
-        else:
+        elif (self.ocean is not None) & (self.ice is None):
             return list(set(self.in_names).union(self.ocean.forcing_names))
+        elif (self.ocean is None) & (self.ice is not None):
+            return list(set(self.in_names).union(self.ice.forcing_names))
+        elif (self.ocean is not None) & (self.ice is not None):
+            return list(
+                set(self.in_names)
+                .union(self.ocean.forcing_names)
+                .union(self.ice.forcing_names)
+            )
 
     def get_next_step_forcing_names(self) -> list[str]:
         """Names of input-only variables which come from the output timestep."""
@@ -165,6 +176,8 @@ class SingleModuleStepConfig(StepConfigABC):
         result = set(input_only_names)
         if self.ocean is not None:
             result = result.union(self.ocean.forcing_names)
+        if self.ice is not None:
+            result = result.union(self.ice.forcing_names)
         result = result.union(self.prescribed_prognostic_names)
         return list(result)
 
@@ -183,6 +196,18 @@ class SingleModuleStepConfig(StepConfigABC):
 
     def get_ocean(self) -> OceanConfig | None:
         return self.ocean
+    
+    def replace_ice(self, ice: IceConfig | None):
+        """
+        Replace the ice model with a new one.
+
+        Args:
+            ice: The new ice model configuration or None.
+        """
+        self.ice = ice
+
+    def get_ice(self) -> IceConfig | None:
+        return self.ice
 
     def replace_prescribed_prognostic_names(self, names: list[str]) -> None:
         """Replace prescribed prognostic names (e.g. when loading from checkpoint)."""
@@ -262,6 +287,12 @@ class SingleModuleStep(StepABC):
             )
         else:
             self.ocean = None
+        if config.ice is not None:
+            self.ice: Ice | None = config.ice.build(
+                config.in_names, config.out_names, dataset_info.timestep
+            )
+        else:
+            self.ice = None
         module = config.builder.build(
             n_in_channels=n_in_channels,
             n_out_channels=n_out_channels,
@@ -309,7 +340,9 @@ class SingleModuleStep(StepABC):
 
     @property
     def ocean_fraction_name(self) -> str | None:
-        if self._config.ocean is not None:
+        if self._config.ice is not None:
+            return self._config.ice.ocean_fraction_name
+        elif (self._config.ice is None) & (self._config.ocean is not None):
             return self._config.ocean.ocean_fraction_name
         return None
 
@@ -372,6 +405,7 @@ class SingleModuleStep(StepABC):
             normalizer=self.normalizer,
             corrector=self._corrector,
             ocean=self.ocean,
+            ice=self.ice,
             residual_prediction=self._config.residual_prediction,
             prognostic_names=self.prognostic_names,
             prescribed_prognostic_names=self._config.prescribed_prognostic_names,
@@ -414,6 +448,7 @@ def step_with_adjustments(
     normalizer: StandardNormalizer,
     corrector: CorrectorABC,
     ocean: Ocean | None,
+    ice: Ice | None,
     residual_prediction: bool,
     prognostic_names: list[str],
     prescribed_prognostic_names: list[str] | None = None,
@@ -434,6 +469,7 @@ def step_with_adjustments(
         normalizer: The normalizer to use.
         corrector: The corrector to use at the end of each step.
         ocean: The ocean model to use.
+        ice: The ice model to use.
         residual_prediction: Whether to use residual prediction.
         prognostic_names: Names of prognostic variables.
         prescribed_prognostic_names: Prognostic names to overwrite from
@@ -451,6 +487,8 @@ def step_with_adjustments(
     output = normalizer.denormalize(output_norm)
     if corrector is not None:
         output = corrector(input, output, next_step_input_data)
+    if ice is not None:
+        output = ice(input, output, next_step_input_data)
     if ocean is not None:
         output = ocean(input, output, next_step_input_data)
     for name in prescribed_prognostic_names:

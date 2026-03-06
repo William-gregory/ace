@@ -42,6 +42,7 @@ from fme.core.device import get_device
 from fme.core.generics.inference import PredictFunction
 from fme.core.generics.optimization import OptimizationABC
 from fme.core.generics.train_stepper import TrainOutputABC, TrainStepperABC
+from fme.core.ice import IceConfig
 from fme.core.labels import BatchLabels
 from fme.core.loss import StepLoss, StepLossConfig
 from fme.core.masking import NullMasking, StaticMaskingConfig
@@ -97,6 +98,7 @@ class SingleModuleStepperConfig:
         normalization: The normalization configuration.
         parameter_init: The parameter initialization configuration.
         ocean: The ocean configuration.
+        ice: The ice configuration.
         loss: The loss configuration.
         corrector: The corrector configuration.
         next_step_forcing_names: Names of forcing variables for the next timestep.
@@ -120,6 +122,7 @@ class SingleModuleStepperConfig:
         default_factory=lambda: ParameterInitializationConfig()
     )
     ocean: OceanConfig | None = None
+    ice: IceConfig | None = None
     loss: StepLossConfig = dataclasses.field(default_factory=lambda: StepLossConfig())
     corrector: AtmosphereCorrectorConfig | CorrectorSelector = dataclasses.field(
         default_factory=lambda: AtmosphereCorrectorConfig()
@@ -305,6 +308,7 @@ class SingleModuleStepperConfig:
                 residual=residual_normalization,
             ),
             ocean=self.ocean,
+            ice=self.ice,
             corrector=self.corrector,
             next_step_forcing_names=self.next_step_forcing_names,
             prescribed_prognostic_names=self.prescribed_prognostic_names,
@@ -702,6 +706,12 @@ class StepperConfig:
 
     def get_ocean(self) -> OceanConfig | None:
         return self.step.get_ocean()
+    
+    def replace_ice(self, ice: IceConfig | None):
+        self.step.replace_ice(ice)
+
+    def get_ice(self) -> IceConfig | None:
+        return self.step.get_ice()
 
     def replace_prescribed_prognostic_names(self, names: list[str]) -> None:
         """Replace prescribed prognostic names (e.g. when loading from checkpoint).
@@ -932,6 +942,20 @@ class Stepper:
             ocean: The new ocean model configuration or None.
         """
         self._config.replace_ocean(ocean)
+        new_stepper: Stepper = self._config.get_stepper(
+            dataset_info=self._dataset_info,
+        )
+        new_stepper._step_obj.load_state(self._step_obj.get_state())
+        self._step_obj = new_stepper._step_obj
+
+    def replace_ice(self, ice: IceConfig | None):
+        """
+        Replace the ice model with a new one.
+
+        Args:
+            ice: The new ice model configuration or None.
+        """
+        self._config.replace_ice(ice)
         new_stepper: Stepper = self._config.get_stepper(
             dataset_info=self._dataset_info,
         )
