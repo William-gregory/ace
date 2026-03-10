@@ -230,8 +230,8 @@ class CoupledStepperConfig:
     Configuration for a coupled atmosphere-ice-ocean stepper. From a common initial
     condition time the atmosphere and ice step first and take as many steps as fit in
     a single ocean step, while being forced by the ocean's initial condition. The 
-    ocean then steps forward once, receiving required forcings from the
-    atmosphere- and ice-generated output as averages over its step window. This completes
+    ocean then steps forward once, receiving required forcings from the atmosphere- 
+    and ice-generated output as averages over its step window. This completes
     a single "coupled step". For subsequent coupled steps, the generated output
     from the ocean forces the atmosphere and ice steps.
 
@@ -267,337 +267,369 @@ class CoupledStepperConfig:
     atmosphere: ComponentConfig | None = None
     ice: ComponentConfig | None = None
     sst_name: str = "sst"
-    sss_name: str = "sss"
-    ssh_name: str = "ssh"
-    tauuo_name: str = "tauuo"
-    tauvo_name: str = "tauvo"
+    sss_name: str | None = None
+    ssh_name: str | None = None
+    tauuo_name: str | None = None
+    tauvo_name: str | None = None
     ocean_fraction_prediction: CoupledOceanFractionConfig | None = None
 
     def __post_init__(self):
         self._validate_component_configs()
+        
+        if self.atmosphere is None:  # ice-ocean, with prescribed atmos
+            self._setup_ice_ocean_coupling()
+        elif self.ice is None:  # atmosphere-ocean (ice may be part of ocean)
+            self._setup_atmosphere_ocean_coupling()
+        elif self.ocean is None:  # atmosphere-ice, with prescribed ocean
+            self._setup_atmosphere_ice_coupling()
+        else:  # fully coupled
+            self._setup_fully_coupled()
+            
+    def _timestep(self, component, attr_name):
+        """Helper method to set timestep for a component."""
+        setattr(self, attr_name, pd.Timedelta(component.timedelta).to_pytimedelta())
+        
+    def _exogenous_forcing_names(self, component, other_components_outputs):
+        """Calculate exogenous forcing names for a given component."""
+        return list(
+            set(component.stepper.input_only_names).difference(other_components_outputs)
+        )
+        
+    def _filter_atmos_forcing_names(self, forcing_names, ocean_fraction_name):
+        """Filter atmosphere forcing names using ocean_fraction_prediction if avail."""
+        if self.ocean_fraction_prediction is not None:
+            return self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
+                forcing_names, ocean_fraction_name
+            )
+        return forcing_names
+        
+    def _shared_forcing_names(self, *forcing_lists):
+        """Calculate shared forcing names across multiple component forcing lists."""
+        result = set(forcing_lists[0])
+        for forcing_list in forcing_lists[1:]:
+            result = result.intersection(forcing_list)
+        return list(result)
+        
+    def _Xcomponent_forcing_names(self,
+                                  target_component,
+                                  source_component,
+                                  extra_forcings=None):
+        """Calculate forcing names from source component to target component."""
+        forcing_names = set(target_component.stepper.input_only_names).intersection(
+            source_component.stepper.output_names
+        )
+        if extra_forcings:
+            forcing_names = forcing_names.union(extra_forcings)
+        return list(forcing_names)
+        
+    def _ocean_extra_forcings(self):
+        """Get standard ocean extra forcing names."""
+        return [self.sst_name,
+                self.sss_name,
+                self.ssh_name,
+                self.tauuo_name,
+                self.tauvo_name]
+        
+    def _atmos_extra_forcings(self, is_ice_coupling=False):
+        """Get extra forcing names for atmosphere coupling."""
+        extra_forcings = []
+        if not is_ice_coupling:
+            extra_forcings.append(self.sst_name)
+        if self.ocean_fraction_prediction is not None:
+            extra_forcings.append(self.ocean_fraction_prediction.sea_ice_fraction_name)
+        return extra_forcings
+        
+    def _component_names(self,
+                         component,
+                         other_components_outputs, 
+                         fraction_name=None, 
+                         add_land_fraction=False):
+        """Calculate all data requirement names for a component."""
+        unfiltered_names = list(
+            set(component.stepper.all_names).difference(other_components_outputs)
+        )
+        
+        # Filter atmosphere names if needed
+        cond = hasattr(self, '_atmosphere')
+        if cond and component == self.atmosphere and fraction_name:
+            filtered_names = self._filter_atmos_forcing_names(unfiltered_names,
+                                                              fraction_name)
+        else:
+            filtered_names = unfiltered_names
+            
+        # Add land fraction if needed
+        if add_land_fraction and self.ocean_fraction_prediction is not None:
+            filtered_names.append(
+                self.ocean_fraction_prediction.land_fraction_name
+            )
+        return filtered_names
 
-        if self.atmosphere is None: #ice-ocean, with prescribed atmos
-            assert ((self.ocean is not None) & (self.ice is not None))
-            ice_ocean_config = self.ice.stepper.get_ocean()
-            assert ice_ocean_config is not None
-            self._ice_ocean_config = ice_ocean_config
+    def _setup_ice_ocean_coupling(self):
+        """Setup ice-ocean coupling configuration."""
+        assert (self.ocean is not None) and (self.ice is not None)
+        
+        ice_ocean_config = self.ice.stepper.get_ocean()
+        assert ice_ocean_config is not None
+        self._ice_ocean_config = ice_ocean_config
+        
+        # Set timesteps
+        self._timestep(self.ocean, '_ocean_timestep')
+        self._timestep(self.ice, '_ice_timestep')
+        
+        # Calculate forcing sets
+        self._ocean_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ocean, self.ice.stepper.output_names
+        )
+        self._ice_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ice, self.ocean.stepper.output_names
+        )
+        self._shared_forcing_exogenous_names = self._shared_forcing_names(
+            self._ocean_forcing_exogenous_names,
+            self._ice_forcing_exogenous_names
+        )
+        self._ice2ocean_forcing_names = self._Xcomponent_forcing_names(
+            self.ocean, self.ice
+        )
+        self._ocean2ice_forcing_names = self._Xcomponent_forcing_names(
+            self.ice, self.ocean, self._ocean_extra_forcings()
+        )
+        
+        # Calculate data requirements
+        self._all_ice_names = list(
+            set(self.ice.stepper.all_names).difference(self.ocean.stepper.output_names)
+        )
+        self._all_ocean_names = list(
+            set(self.ocean.stepper.all_names).difference(self._all_ice_names)
+        )
 
-            # set timesteps
-            self._ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
-            self._ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
+    def _setup_atmosphere_ocean_coupling(self):
+        """Setup atmosphere-ocean coupling configuration."""
+        assert (self.atmosphere is not None) and (self.ocean is not None)
+        
+        atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
+        assert atmosphere_ocean_config is not None
+        self._atmosphere_ocean_config = atmosphere_ocean_config
+        
+        # Set timesteps
+        self._timestep(self.ocean, '_ocean_timestep')
+        self._timestep(self.atmosphere, '_atmosphere_timestep')
+        
+        # Calculate forcing sets
+        self._ocean_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ocean, self.atmosphere.stepper.output_names
+        )
+        unfiltered_atmosphere_forcing_names = self._exogenous_forcing_names(
+            self.atmosphere, self.ocean.stepper.output_names
+        )
+        self._atmosphere_forcing_exogenous_names = self._filter_atmos_forcing_names(
+            unfiltered_atmosphere_forcing_names,
+            self._atmosphere_ocean_config.ocean_fraction_name
+        )
+        self._shared_forcing_exogenous_names = self._shared_forcing_names(
+            self._ocean_forcing_exogenous_names, 
+            self._atmosphere_forcing_exogenous_names
+        )
+        self._atmosphere2ocean_forcing_names = self._Xcomponent_forcing_names(
+            self.ocean, self.atmosphere
+        )
+        self._ocean2atmosphere_forcing_names = self._Xcomponent_forcing_names(
+            self.atmosphere, self.ocean, self._ocean_extra_forcings()
+        )
+        
+        # Calculate data requirements
+        unfiltered_all_atmosphere_names = list(
+            set(self.atmosphere.stepper.all_names).difference(
+                self.ocean.stepper.output_names)
+        )
+        self._all_atmosphere_names = self._filter_atmos_forcing_names(
+            unfiltered_all_atmosphere_names,
+            getattr(self, 'ocean_fraction_name', None)
+        )
+        self._all_ocean_names = list(
+            set(self.ocean.stepper.all_names).difference(self._all_atmosphere_names)
+        )
+        if self.ocean_fraction_prediction is not None:
+            self._all_ocean_names.append(
+                self.ocean_fraction_prediction.land_fraction_name)
 
-            # calculate forcing sets
-            self._ocean_forcing_exogenous_names = list(
-                set(self.ocean.stepper.input_only_names).difference(
-                    self.ice.stepper.output_names
-                )
-            )
-            self._ice_forcing_exogenous_names = list(
-                set(self.ice.stepper.input_only_names).difference(
-                    self.ocean.stepper.output_names
-                )
-            )
-            self._shared_forcing_exogenous_names = list(
-                set(self._ocean_forcing_exogenous_names).intersection(
-                    self._ice_forcing_exogenous_names
-                )
-            )
-            self._ice_to_ocean_forcing_names = list(
-                set(self.ocean.stepper.input_only_names).intersection(
-                    self.ice.stepper.output_names
-                )
-            )
-            extra_forcings_names = [self.sst_name, self.sss_name, self.ssh_name,
-                                    self.tauuo_name, self.tauvo_name]
-            self._ocean_to_ice_forcing_names = list(
-                set(self.ice.stepper.input_only_names)
-                .intersection(self.ocean.stepper.output_names)
-                .union(extra_forcings_names
-                )
-            )
-            # calculate names for each component's data requirements
-            self._all_ice_names = list(
-                set(self.ice.stepper.all_names).difference(
-                    self.ocean.stepper.output_names
-                )
-            )
-            # NOTE: this removes "shared" forcings from the ocean data requirements
-            self._all_ocean_names = list(
-                set(self.ocean.stepper.all_names).difference(self._all_ice_names)
-            )
+    def _setup_atmosphere_ice_coupling(self):
+        """Setup atmosphere-ice coupling configuration."""
+        assert (self.atmosphere is not None) and (self.ice is not None)
+        
+        atmosphere_ice_config = self.atmosphere.stepper.get_ice()
+        assert atmosphere_ice_config is not None
+        self._atmosphere_ice_config = atmosphere_ice_config
+        
+        # Set timesteps
+        self._timestep(self.ice, '_ice_timestep')
+        self._timestep(self.atmosphere, '_atmosphere_timestep')
+        
+        # Calculate forcing sets
+        self._ice_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ice, self.atmosphere.stepper.output_names
+        )
+        unfiltered_atmosphere_forcing_names = self._exogenous_forcing_names(
+            self.atmosphere, self.ice.stepper.output_names
+        )
+        self._atmosphere_forcing_exogenous_names = self._filter_atmos_forcing_names(
+            unfiltered_atmosphere_forcing_names, 
+            self._atmosphere_ice_config.ocean_fraction_name
+        )
+        self._shared_forcing_exogenous_names = self._shared_forcing_names(
+            self._ice_forcing_exogenous_names,
+            self._atmosphere_forcing_exogenous_names
+        )
+        self._atmosphere2ice_forcing_names = self._Xcomponent_forcing_names(
+            self.ice, self.atmosphere
+        )
+        self._ice2atmosphere_forcing_names = self._Xcomponent_forcing_names(
+            self.atmosphere,
+            self.ice, 
+            self._atmos_extra_forcings(is_ice_coupling=True)
+        )
+        
+        # Calculate data requirements
+        unfiltered_all_atmosphere_names = list(
+            set(self.atmosphere.stepper.all_names).difference(
+                self.ice.stepper.output_names)
+        )
+        # Note: Original code had ice_fraction_prediction which seems like a typo
+        self._all_atmosphere_names = self._filter_atmos_forcing_names(
+            unfiltered_all_atmosphere_names, getattr(self, 'ocean_fraction_name', None)
+        )
+        self._all_ice_names = list(
+            set(self.ice.stepper.all_names).difference(self._all_atmosphere_names)
+        )
+        if self.ocean_fraction_prediction is not None:
+            self._all_ice_names.append(self.ocean_fraction_prediction.land_fraction_name)
 
-        if self.ice is None: #atmosphere-ocean (ice may be part of ocean)
-            assert ((self.atmosphere is not None) & (self.ocean is not None))
-            atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
-            assert atmosphere_ocean_config is not None
-            self._atmosphere_ocean_config = atmosphere_ocean_config
-
-            # set timesteps
-            self._ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
-            self._atmosphere_timestep = pd.Timedelta(
-                self.atmosphere.timedelta
-            ).to_pytimedelta()
-
-            # calculate forcing sets
-            self._ocean_forcing_exogenous_names = list(
-                set(self.ocean.stepper.input_only_names).difference(
-                    self.atmosphere.stepper.output_names
-                )
-            )
-            unfiltered_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names).difference(
-                    self.ocean.stepper.output_names
-                )
-            )
-            if self.ocean_fraction_prediction is not None:
-                self._atmosphere_forcing_exogenous_names = (
-                    self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_atmosphere_forcing_names,
-                        self._atmosphere_ocean_config.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._atmosphere_forcing_exogenous_names = (
-                    unfiltered_atmosphere_forcing_names
-                )
-            self._shared_forcing_exogenous_names = list(
-                set(self._ocean_forcing_exogenous_names).intersection(
-                    self._atmosphere_forcing_exogenous_names
-                )
-            )
-            self._atmosphere_to_ocean_forcing_names = list(
-                set(self.ocean.stepper.input_only_names).intersection(
-                    self.atmosphere.stepper.output_names
-                )
-            )
-            extra_forcings_names = [self.sst_name]
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: this is only necessary for the special case where the
-                # atmosphere doesn't use the sea ice fraction as an ML forcing
-                extra_forcings_names.append(
-                    self.ocean_fraction_prediction.sea_ice_fraction_name
-                )
-
-            self._ocean_to_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names)
-                .intersection(self.ocean.stepper.output_names)
-                .union(extra_forcings_names)
-            )
-
-            # calculate names for each component's data requirements
-            unfiltered_all_atmosphere_names = list(
-                set(self.atmosphere.stepper.all_names).difference(
-                    self.ocean.stepper.output_names
-                )
-            )
-            if self.ocean_fraction_prediction is not None:
-                self._all_atmosphere_names = (
-                    self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_all_atmosphere_names,
-                        self.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._all_atmosphere_names = unfiltered_all_atmosphere_names
-            # NOTE: this removes "shared" forcings from the ocean data requirements
-            self._all_ocean_names = list(
-                set(self.ocean.stepper.all_names).difference(self._all_atmosphere_names)
-            )
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: land_fraciton is necessary to derive sea_ice_fraction from
-                # ocean_sea_ice_fraction
-                self._all_ocean_names.append(
-                    self.ocean_fraction_prediction.land_fraction_name
-                )
-
-        if self.ocean is None: #atmosphere-ice, with prescribed ocean
-            assert ((self.atmosphere is not None) & (self.ice is not None))
-            atmosphere_ice_config = self.atmosphere.stepper.get_ice()
-            assert atmosphere_ice_config is not None
-            self._atmosphere_ice_config = atmosphere_ice_config
-
-            # set timesteps
-            self._ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
-            self._atmosphere_timestep = pd.Timedelta(
-                self.atmosphere.timedelta
-            ).to_pytimedelta()
-
-            # calculate forcing sets
-            self._ice_forcing_exogenous_names = list(
-                set(self.ice.stepper.input_only_names).difference(
-                    self.atmosphere.stepper.output_names
-                )
-            )
-            unfiltered_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names).difference(
-                    self.ice.stepper.output_names
-                )
-            )
-            if self.ocean_fraction_prediction is not None:
-                self._atmosphere_forcing_exogenous_names = (
-                    self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_atmosphere_forcing_names,
-                        self._atmosphere_ocean_config.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._atmosphere_forcing_exogenous_names = (
-                    unfiltered_atmosphere_forcing_names
-                )
-            self._shared_forcing_exogenous_names = list(
-                set(self._ice_forcing_exogenous_names).intersection(
-                    self._atmosphere_forcing_exogenous_names
-                )
-            )
-            self._atmosphere_to_ice_forcing_names = list(
-                set(self.ocean.stepper.input_only_names).intersection(
-                    self.atmosphere.stepper.output_names
-                )
-            )
-            extra_forcings_names = []
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: this is only necessary for the special case where the
-                # atmosphere doesn't use the sea ice fraction as an ML forcing
-                extra_forcings_names.append(
-                    self.ocean_fraction_prediction.sea_ice_fraction_name
-                )
-
-            self._ice_to_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names)
-                .intersection(self.ice.stepper.output_names)
-                .union(extra_forcings_names)
-            )
-
-            # calculate names for each component's data requirements
-            unfiltered_all_atmosphere_names = list(
-                set(self.atmosphere.stepper.all_names).difference(
-                    self.ice.stepper.output_names
-                )
-            )
-            if self.ice_fraction_prediction is not None:
-                self._all_atmosphere_names = (
-                    self.ice_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_all_atmosphere_names,
-                        self.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._all_atmosphere_names = unfiltered_all_atmosphere_names
-            # NOTE: this removes "shared" forcings from the ice data requirements
-            self._all_ice_names = list(
-                set(self.ice.stepper.all_names).difference(self._all_atmosphere_names)
-            )
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: land_fraciton is necessary to derive sea_ice_fraction from
-                # ocean_sea_ice_fraction
-                self._all_ice_names.append(
-                    self.ocean_fraction_prediction.land_fraction_name
-                )
-
-        if ((self.ocean is not None) & (self.ice is not None) & (self.atmosphere is not None)): #fully coupled
-            atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
-            atmosphere_ice_config = self.atmosphere.stepper.get_ice()
-            assert ((atmosphere_ocean_config is not None) & (atmosphere_ice_config is not None))
-            self._atmosphere_ice_config = atmosphere_ice_config
-            self._atmosphere_ocean_config = atmosphere_ocean_config
-
-            # set timesteps
-            self._ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
-            self._ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
-            self._atmosphere_timestep = pd.Timedelta(
-                self.atmosphere.timedelta
-            ).to_pytimedelta()
-
-            # calculate forcing sets
-            self._ocean_forcing_exogenous_names = list(
-                set(self.ocean.stepper.input_only_names).difference(
-                set(self.atmosphere.stepper.output_names).
-                union(self.ice.stepper.output_names)
-                )
-            )
-            unfiltered_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names).difference(
-                set(self.ocean.stepper.output_names).
-                union(self.ice.stepper.output_names)
-                )
-            )
-            if self.ocean_fraction_prediction is not None:
-                self._atmosphere_forcing_exogenous_names = (
-                    self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_atmosphere_forcing_names,
-                        self._atmosphere_ocean_config.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._atmosphere_forcing_exogenous_names = (
-                    unfiltered_atmosphere_forcing_names
-                )
-            self._shared_forcing_exogenous_names = list(
-                set(self._ocean_forcing_exogenous_names).intersection(
-                    self._atmosphere_forcing_exogenous_names
-                )
-            )
-            self._atmosphere_to_ocean_forcing_names = list(
-                set(self.ocean.stepper.input_only_names).intersection(
-                    self.atmosphere.stepper.output_names
-                )
-            )
-            extra_forcings_names = [self.sst_name]
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: this is only necessary for the special case where the
-                # atmosphere doesn't use the sea ice fraction as an ML forcing
-                extra_forcings_names.append(
-                    self.ocean_fraction_prediction.sea_ice_fraction_name
-                )
-
-            self._ocean_to_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names)
-                .intersection(self.ocean.stepper.output_names)
-                .union(extra_forcings_names)
-            )
-
-            # calculate names for each component's data requirements
-            unfiltered_all_atmosphere_names = list(
-                set(self.atmosphere.stepper.all_names).difference(
-                    self.ocean.stepper.output_names
-                )
-            )
-            if self.ocean_fraction_prediction is not None:
-                self._all_atmosphere_names = (
-                    self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
-                        unfiltered_all_atmosphere_names,
-                        self.ocean_fraction_name,
-                    )
-                )
-            else:
-                self._all_atmosphere_names = unfiltered_all_atmosphere_names
-            # NOTE: this removes "shared" forcings from the ocean data requirements
-            self._all_ocean_names = list(
-                set(self.ocean.stepper.all_names).difference(self._all_atmosphere_names)
-            )
-            if self.ocean_fraction_prediction is not None:
-                # NOTE: land_fraciton is necessary to derive sea_ice_fraction from
-                # ocean_sea_ice_fraction
-                self._all_ocean_names.append(
-                    self.ocean_fraction_prediction.land_fraction_name
-                )
+    def _setup_fully_coupled(self):
+        """Setup fully coupled configuration."""
+        assert self.ocean is not None
+        assert self.ice is not None
+        assert self.atmosphere is not None
+        
+        atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
+        atmosphere_ice_config = self.atmosphere.stepper.get_ice()
+        assert atmosphere_ocean_config is not None
+        assert atmosphere_ice_config is not None
+        self._atmosphere_ice_config = atmosphere_ice_config
+        self._atmosphere_ocean_config = atmosphere_ocean_config
+        
+        # Set timesteps
+        self._timestep(self.ocean, '_ocean_timestep')
+        self._timestep(self.ice, '_ice_timestep')
+        self._timestep(self.atmosphere, '_atmosphere_timestep')
+        
+        # Calculate forcing sets
+        combined_outputs = set(self.atmosphere.stepper.output_names).union(
+            self.ice.stepper.output_names)
+        self._ocean_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ocean, combined_outputs
+        )
+        combined_outputs = set(self.ocean.stepper.output_names).union(
+            self.ice.stepper.output_names)
+        unfiltered_atmosphere_forcing_names = self._exogenous_forcing_names(
+            self.atmosphere, combined_outputs
+        )
+        self._atmosphere_forcing_exogenous_names = self._filter_atmos_forcing_names(
+            unfiltered_atmosphere_forcing_names,
+            self._atmosphere_ice_config.ocean_fraction_name
+        )
+        
+        # Ice forcing exogenous names need to be calculated too for shared forcings
+        combined_outputs = set(self.atmosphere.stepper.output_names).union(
+            self.ocean.stepper.output_names)
+        self._ice_forcing_exogenous_names = self._exogenous_forcing_names(
+            self.ice, combined_outputs
+        )
+        self._shared_forcing_exogenous_names = self._shared_forcing_names(
+            self._ocean_forcing_exogenous_names, 
+            self._atmosphere_forcing_exogenous_names, 
+            self._ice_forcing_exogenous_names
+        )
+        
+        # Component-to-component forcing names
+        self._atmosphere2ocean_forcing_names = self._Xcomponent_forcing_names(
+            self.ocean, self.atmosphere
+        )
+        self._atmosphere2ice_forcing_names = self._Xcomponent_forcing_names(
+            self.ice, self.atmosphere
+        )
+        
+        ocean_extra_forcings = self._ocean_extra_forcings()
+        atmosphere_extra_forcings = self._atmos_extra_forcings()
+        
+        self._ocean2atmosphere_forcing_names = self._Xcomponent_forcing_names(
+            self.atmosphere, self.ocean, atmosphere_extra_forcings
+        )
+        self._ocean2ice_forcing_names = self._Xcomponent_forcing_names(
+            self.ice, self.ocean, ocean_extra_forcings
+        )
+        self._ice2ocean_forcing_names = self._Xcomponent_forcing_names(
+            self.ocean, self.ice
+        )
+        self._ice2atmosphere_forcing_names = self._Xcomponent_forcing_names(
+            self.atmosphere, self.ice
+        )
+        
+        # Calculate data requirements
+        combined_outputs = set(self.ocean.stepper.output_names).union(
+            self.ice.stepper.output_names)
+        unfiltered_all_atmosphere_names = list(
+            set(self.atmosphere.stepper.all_names).difference(combined_outputs)
+        )
+        self._all_atmosphere_names = self._filter_atmos_forcing_names(
+            unfiltered_all_atmosphere_names, getattr(self, 'ocean_fraction_name', None)
+        )
+        
+        combined_names = set(self.ocean.stepper.all_names).difference(
+            self._all_atmosphere_names).union(
+            self.ice.stepper.all_names
+        )
+        self._all_ocean_names = list(combined_names)
+        if self.ocean_fraction_prediction is not None:
+            self._all_ocean_names.append(
+                self.ocean_fraction_prediction.land_fraction_name)
 
     @property
     def timestep(self) -> datetime.timedelta:
         # the "coupled timestep" is the same as the ocean's
-        return self._ocean_timestep
+        # or sea ice if doing atmosphere-ice coupling
+        if self.ocean is not None:
+            return self._ocean_timestep
+        elif (self.ocean is None) & (self.ice is not None):
+            return self._ice_timestep
 
     @property
     def ocean_timestep(self) -> datetime.timedelta:
-        return self._ocean_timestep
+        if self.ocean is not None:
+            return self._ocean_timestep
+        else:
+            raise AttributeError("Ocean component is None")
+        
+    @property
+    def ice_timestep(self) -> datetime.timedelta:
+        if self.ice is not None:
+            return self._ice_timestep
+        else:
+            raise AttributeError("Ice component is None")
 
     @property
     def atmosphere_timestep(self) -> datetime.timedelta:
-        return self._atmosphere_timestep
+        if self.atmosphere is not None:
+            return self._atmosphere_timestep
+        else:
+            raise AttributeError("Atmosphere component is None")
 
     @property
     def n_inner_steps(self) -> int:
-        return self.ocean_timestep // self.atmosphere_timestep
+        if self.atmosphere is None:  # ice-ocean coupling
+            return self.ocean_timestep // self.ice_timestep
+        elif self.ocean is None:  # atmosphere-ice coupling
+            return self.ice_timestep // self.atmosphere_timestep
+        else:  # atmosphere-ocean or fully coupled
+            return self.ocean_timestep // self.atmosphere_timestep
 
     @property
     def atmosphere_ocean_config(self) -> OceanConfig:
@@ -633,6 +665,11 @@ class CoupledStepperConfig:
     def ocean_forcing_exogenous_names(self) -> list[str]:
         """Ocean forcing variables that are not outputs of the atmosphere."""
         return self._ocean_forcing_exogenous_names
+    
+    @property
+    def ice_forcing_exogenous_names(self) -> list[str]:
+        """Ice forcing variables that are not outputs of the atmosphere."""
+        return self._ice_forcing_exogenous_names
 
     @property
     def atmosphere_forcing_exogenous_names(self) -> list[str]:
@@ -658,91 +695,129 @@ class CoupledStepperConfig:
         ocean_names = (
             self.ocean.stepper.output_names + self._ocean_forcing_exogenous_names
         )
-        return CoupledNames(ocean=ocean_names, atmosphere=atmosphere_names)
+        ice_names = (
+            self.ice.stepper.output_names + self._ice_forcing_exogenous_names
+        )
+        return CoupledNames(ocean=ocean_names, atmosphere=atmosphere_names, ice=ice_names)
 
     @property
     def atmosphere_to_ocean_forcing_names(self) -> list[str]:
         """Ocean forcing variables that are outputs of the atmosphere."""
         return self._atmosphere_to_ocean_forcing_names
+    
+    @property
+    def atmosphere_to_ice_forcing_names(self) -> list[str]:
+        """Ice forcing variables that are outputs of the atmosphere."""
+        return self._atmosphere_to_ice_forcing_names
 
     @property
     def ocean_to_atmosphere_forcing_names(self) -> list[str]:
         """Atmosphere forcing variables that are outputs of the ocean."""
         return self._ocean_to_atmosphere_forcing_names
+    
+    @property
+    def ocean_to_ice_forcing_names(self) -> list[str]:
+        """Ice forcing variables that are outputs of the ocean."""
+        return self._ocean_to_ice_forcing_names
+    
+    @property
+    def ice_to_atmosphere_forcing_names(self) -> list[str]:
+        """Atmosphere forcing variables that are outputs of the Ice."""
+        return self._ice_to_atmosphere_forcing_names
+    
+    @property
+    def ice_to_ocean_forcing_names(self) -> list[str]:
+        """Ocean forcing variables that are outputs of the Ice."""
+        return self._ice_to_ocean_forcing_names
 
     def _validate_component_configs(self):
-        # validate atmosphere's OceanConfig
-        atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
-        if atmosphere_ocean_config is None:
-            raise ValueError(
-                "The atmosphere stepper 'ocean' config is missing but must be set for "
-                "coupled emulation."
-            )
-        if atmosphere_ocean_config.slab is not None:
-            raise ValueError(
-                "The atmosphere stepper 'ocean' config cannot use 'slab' for "
-                "coupled emulation."
-            )
-        # validate compatibility of ocean and atmosphere timestep sizes
-        ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
-        atmosphere_timestep = pd.Timedelta(self.atmosphere.timedelta).to_pytimedelta()
-        if atmosphere_timestep > ocean_timestep:
-            raise ValueError("Atmosphere timedelta must not be larger than ocean's.")
-        n_inner_steps = ocean_timestep / atmosphere_timestep
-        if n_inner_steps != int(n_inner_steps):
-            raise ValueError("Ocean timedelta must be a multiple of the atmosphere's.")
+        # Ensure at least two components are present
+        components_present = sum([
+            self.ocean is not None,
+            self.atmosphere is not None, 
+            self.ice is not None
+        ])
+        if components_present < 2:
+            raise ValueError("At least two components must be configured for coupling.")
+            
+        # Validate atmosphere's OceanConfig when atmosphere is present
+        if self.atmosphere is not None:
+            atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
+            if atmosphere_ocean_config is None:
+                raise ValueError(
+                    "The atmosphere stepper 'ocean' config is missing but must be set for "
+                    "coupled emulation."
+                )
+            if atmosphere_ocean_config.slab is not None:
+                raise ValueError(
+                    "The atmosphere stepper 'ocean' config cannot use 'slab' for "
+                    "coupled emulation."
+                )
+        
+        # Validate atmosphere-ocean coupling when both are present
+        if self.atmosphere is not None and self.ocean is not None:
+            # validate compatibility of ocean and atmosphere timestep sizes
+            ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
+            atmosphere_timestep = pd.Timedelta(self.atmosphere.timedelta).to_pytimedelta()
+            if atmosphere_timestep > ocean_timestep:
+                raise ValueError("Atmosphere timedelta must not be larger than ocean's.")
+            n_inner_steps = ocean_timestep / atmosphere_timestep
+            if n_inner_steps != int(n_inner_steps):
+                raise ValueError("Ocean timedelta must be a multiple of the atmosphere's.")
 
-        # check for overlapping output names
-        duplicate_outputs = set(self.ocean.stepper.output_names).intersection(
-            self.atmosphere.stepper.output_names
-        )
-        if len(duplicate_outputs) > 0:
-            raise ValueError(
-                "Output variable names of CoupledStepper components cannot "
-                f"overlap. Found the following duplicated names: {duplicate_outputs}"
-            )
-
-        # ocean diagnostics cannot be used as atmosphere inputs
-        ocean_diags_as_atmos_forcings = list(
-            set(self.atmosphere.stepper.input_only_names)
-            .intersection(self.ocean.stepper.output_names)
-            .difference(self.ocean.stepper.input_names)
-        )
-        if len(ocean_diags_as_atmos_forcings) > 0:
-            raise ValueError(
-                "CoupledStepper only supports ocean prognostic variables as atmosphere "
-                "forcings, but the following ocean diagnostic variables are inputs to "
-                f"the atmosphere: {ocean_diags_as_atmos_forcings}."
-            )
-
-        # all ocean inputs that are atmosphere outputs must be "next step"
-        # forcings according to the ocean stepper config
-        atmosphere_to_ocean_forcing_names = list(
-            set(self.ocean.stepper.input_only_names).intersection(
+            # check for overlapping output names between ocean and atmosphere
+            duplicate_outputs = set(self.ocean.stepper.output_names).intersection(
                 self.atmosphere.stepper.output_names
             )
-        )
-        missing_next_step_forcings = list(
-            set(atmosphere_to_ocean_forcing_names).difference(
-                self.ocean.stepper.next_step_forcing_names
-            )
-        )
-        if len(missing_next_step_forcings) > 0:
-            raise ValueError(
-                "The following variables which are atmosphere component outputs "
-                "and ocean component inputs were not found among the ocean's "
-                f"next_step_forcing_names: {missing_next_step_forcings}."
-            )
+            if len(duplicate_outputs) > 0:
+                raise ValueError(
+                    "Output variable names of CoupledStepper components cannot "
+                    f"overlap. Found the following duplicated names: {duplicate_outputs}"
+                )
 
-        # sst_name must be present in the ocean's output names
-        if self.sst_name not in self.ocean.stepper.output_names:
-            raise ValueError(
-                f"The variable {self.sst_name} is not in the ocean's output "
-                "names but is required for coupling with the atmosphere."
+            # ocean diagnostics cannot be used as atmosphere inputs
+            ocean_diags_as_atmos_forcings = list(
+                set(self.atmosphere.stepper.input_only_names)
+                .intersection(self.ocean.stepper.output_names)
+                .difference(self.ocean.stepper.input_names)
             )
+            if len(ocean_diags_as_atmos_forcings) > 0:
+                raise ValueError(
+                    "CoupledStepper only supports ocean prognostic variables as atmosphere "
+                    "forcings, but the following ocean diagnostic variables are inputs to "
+                    f"the atmosphere: {ocean_diags_as_atmos_forcings}."
+                )
 
-        # validate ocean_fraction_prediction
-        if self.ocean_fraction_prediction is not None:
+            # all ocean inputs that are atmosphere outputs must be "next step"
+            # forcings according to the ocean stepper config
+            atmosphere_to_ocean_forcing_names = list(
+                set(self.ocean.stepper.input_only_names).intersection(
+                    self.atmosphere.stepper.output_names
+                )
+            )
+            missing_next_step_forcings = list(
+                set(atmosphere_to_ocean_forcing_names).difference(
+                    self.ocean.stepper.next_step_forcing_names
+                )
+            )
+            if len(missing_next_step_forcings) > 0:
+                raise ValueError(
+                    "The following variables which are atmosphere component outputs "
+                    "and ocean component inputs were not found among the ocean's "
+                    f"next_step_forcing_names: {missing_next_step_forcings}."
+                )
+
+        # Validate ocean requirements when ocean is present
+        if self.ocean is not None:
+            # sst_name must be present in the ocean's output names
+            if self.sst_name not in self.ocean.stepper.output_names:
+                raise ValueError(
+                    f"The variable {self.sst_name} is not in the ocean's output "
+                    "names but is required for coupling with the atmosphere."
+                )
+
+        # validate ocean_fraction_prediction when both ocean and atmosphere are present
+        if self.ocean_fraction_prediction is not None and self.atmosphere is not None and self.ocean is not None:
             self.ocean_fraction_prediction.validate_ocean_prognostic_names(
                 self.ocean.stepper.prognostic_names,
             )
@@ -776,42 +851,74 @@ class CoupledStepperConfig:
             training, these steps are included when computing gradients.
 
         """
+        ocean_requirements = None
+        atmosphere_requirements = None
+        
+        if self.ocean is not None:
+            ocean_requirements = self._get_ocean_data_requirements(n_coupled_steps)
+        
+        if self.atmosphere is not None:
+            n_atmosphere_steps = n_coupled_steps * self.n_inner_steps if self.ocean is not None else n_coupled_steps
+            atmosphere_requirements = self._get_atmosphere_data_requirements(n_atmosphere_steps)
+        
         return CoupledDataRequirements(
-            ocean_timestep=self.ocean_timestep,
-            ocean_requirements=self._get_ocean_data_requirements(n_coupled_steps),
-            atmosphere_timestep=self.atmosphere_timestep,
-            atmosphere_requirements=self._get_atmosphere_data_requirements(
-                n_coupled_steps * self.n_inner_steps
-            ),
+            ocean_timestep=getattr(self, '_ocean_timestep', None),
+            ocean_requirements=ocean_requirements,
+            atmosphere_timestep=getattr(self, '_atmosphere_timestep', None),
+            atmosphere_requirements=atmosphere_requirements,
         )
 
     def get_prognostic_state_data_requirements(
         self,
     ) -> CoupledPrognosticStateDataRequirements:
         """Get the PrognosticStateDataRequirements for the ocean and atmosphere."""
+        ocean_requirements = None
+        atmosphere_requirements = None
+        ice_requirements = None
+        
+        if self.ocean is not None:
+            ocean_requirements = self.ocean.stepper.get_prognostic_state_data_requirements()
+        
+        if self.atmosphere is not None:
+            atmosphere_requirements = self.atmosphere.stepper.get_prognostic_state_data_requirements()
+        
+        if self.ice is not None:
+            ice_requirements = self.ice.stepper.get_prognostic_state_data_requirements()
+        
         return CoupledPrognosticStateDataRequirements(
-            ocean=self.ocean.stepper.get_prognostic_state_data_requirements(),
-            atmosphere=self.atmosphere.stepper.get_prognostic_state_data_requirements(),
+            ocean=ocean_requirements,
+            atmosphere=atmosphere_requirements,
+            ice=ice_requirements,
         )
 
     def get_forcing_window_data_requirements(
         self, n_coupled_steps: int
     ) -> CoupledDataRequirements:
-        ocean_forcing_names = list(
-            set(self.ocean_forcing_exogenous_names).difference(
-                self.shared_forcing_exogenous_names
+        ocean_requirements = None
+        atmosphere_requirements = None
+        
+        if self.ocean is not None:
+            ocean_forcing_names = list(
+                set(self.ocean_forcing_exogenous_names).difference(
+                    self.shared_forcing_exogenous_names
+                )
             )
-        )
-        return CoupledDataRequirements(
-            ocean_timestep=self.ocean_timestep,
-            ocean_requirements=DataRequirements(
+            ocean_requirements = DataRequirements(
                 ocean_forcing_names, n_timesteps=n_coupled_steps + 1
-            ),
-            atmosphere_timestep=self.atmosphere_timestep,
-            atmosphere_requirements=DataRequirements(
+            )
+        
+        if self.atmosphere is not None:
+            n_atmosphere_steps = n_coupled_steps * self.n_inner_steps if self.ocean is not None else n_coupled_steps
+            atmosphere_requirements = DataRequirements(
                 names=self.atmosphere_forcing_exogenous_names,
-                n_timesteps=n_coupled_steps * self.n_inner_steps + 1,
-            ),
+                n_timesteps=n_atmosphere_steps + 1,
+            )
+        
+        return CoupledDataRequirements(
+            ocean_timestep=getattr(self, '_ocean_timestep', None),
+            ocean_requirements=ocean_requirements,
+            atmosphere_timestep=getattr(self, '_atmosphere_timestep', None),
+            atmosphere_requirements=atmosphere_requirements,
         )
 
     def _get_ocean_stepper(
