@@ -847,14 +847,22 @@ class CoupledStepperConfig:
                     "names but is required for coupling with the atmosphere."
                 )
 
-        # validate ocean_fraction_prediction when both ocean and atmosphere are present
-        if self.ocean_fraction_prediction is not None and self.atmosphere is not None and self.ocean is not None:
-            self.ocean_fraction_prediction.validate_ocean_prognostic_names(
-                self.ocean.stepper.prognostic_names,
-            )
-            self.ocean_fraction_prediction.validate_atmosphere_forcing_names(
-                self.atmosphere.stepper.input_only_names
-            )
+        # validate ocean_fraction_prediction when atmosphere is present
+        if self.ocean_fraction_prediction is not None:
+            if (self.ice is not None) & (self.atmosphere is not None):
+                self.ocean_fraction_prediction.validate_ice_prognostic_names(
+                    self.ice.stepper.prognostic_names
+                )
+                self.ocean_fraction_prediction.validate_atmosphere_forcing_names(
+                    self.atmosphere.stepper.input_only_names
+                )
+            elif (self.ice is None) & (self.atmosphere is not None):
+                self.ocean_fraction_prediction.validate_ocean_prognostic_names(
+                    self.ocean.stepper.prognostic_names,
+                )
+                self.ocean_fraction_prediction.validate_atmosphere_forcing_names(
+                    self.atmosphere.stepper.input_only_names
+                )
 
     def _get_ocean_data_requirements(self, n_forward_steps: int) -> DataRequirements:
         return DataRequirements(
