@@ -20,29 +20,39 @@ class CoupledPrognosticState:
     evolving forward in time.
     """
 
-    def __init__(self, ocean_data: PrognosticState, atmosphere_data: PrognosticState):
+    def __init__(self,
+                 ocean_data: PrognosticState, 
+                 ice_data: PrognosticState, 
+                 atmosphere_data: PrognosticState):
         self.ocean_data = ocean_data
+        self.ice_data = ice_data
         self.atmosphere_data = atmosphere_data
 
     def to_device(self) -> "CoupledPrognosticState":
         return CoupledPrognosticState(
-            self.ocean_data.to_device(), self.atmosphere_data.to_device()
+            self.ocean_data.to_device(), 
+            self.ice_data.to_device(), 
+            self.atmosphere_data.to_device()
         )
 
     def as_batch_data(self) -> "CoupledBatchData":
         return CoupledBatchData(
-            self.ocean_data.as_batch_data(), self.atmosphere_data.as_batch_data()
+            self.ocean_data.as_batch_data(), 
+            self.ice_data.as_batch_data(), 
+            self.atmosphere_data.as_batch_data()
         )
 
 
 @dataclasses.dataclass
 class CoupledBatchData:
     ocean_data: BatchData
+    ice_data: BatchData
     atmosphere_data: BatchData
 
     def to_device(self) -> "CoupledBatchData":
         return self.__class__(
             ocean_data=self.ocean_data.to_device(),
+            ice_data=self.ice_data.to_device(),
             atmosphere_data=self.atmosphere_data.to_device(),
         )
 
@@ -50,36 +60,46 @@ class CoupledBatchData:
     def new_on_device(
         cls,
         ocean_data: BatchData,
+        ice_data: BatchData,
         atmosphere_data: BatchData,
     ) -> "CoupledBatchData":
         ocean_batch = ocean_data.to_device()
+        ice_batch = ice_data.to_device()
         atmos_batch = atmosphere_data.to_device()
-        return CoupledBatchData(ocean_data=ocean_batch, atmosphere_data=atmos_batch)
+        return CoupledBatchData(ocean_data=ocean_batch,
+                                ice_data=ice_batch,
+                                atmosphere_data=atmos_batch)
 
     @classmethod
     def new_on_cpu(
         cls,
         ocean_data: BatchData,
+        ice_data: BatchData,
         atmosphere_data: BatchData,
     ) -> "CoupledBatchData":
         ocean_batch = ocean_data.to_cpu()
+        ice_batch = ice_data.to_cpu()
         atmos_batch = atmosphere_data.to_cpu()
-        return CoupledBatchData(ocean_data=ocean_batch, atmosphere_data=atmos_batch)
+        return CoupledBatchData(ocean_data=ocean_batch,
+                                ice_data=ice_batch,
+                                atmosphere_data=atmos_batch)
 
     @classmethod
     def collate_fn(
         cls,
         samples: Sequence[CoupledDatasetItem],
         ocean_horizontal_dims: list[str],
+        ice_horizontal_dims: list[str],
         atmosphere_horizontal_dims: list[str],
         sample_dim_name: str = "sample",
         ocean_label_encoding: LabelEncoding | None = None,
+        ice_label_encoding: LabelEncoding | None = None,
         atmosphere_label_encoding: LabelEncoding | None = None,
     ) -> "CoupledBatchData":
         """
-        Collate function for use with PyTorch DataLoader. Separates out ocean
-        and atmosphere sample tuples and constructs BatchData instances for
-        each of the two components.
+        Collate function for use with PyTorch DataLoader. Separates out ocean,
+        ice, and atmosphere sample tuples and constructs BatchData instances for
+        each component.
 
         """
         ocean_data = BatchData.from_sample_tuples(
@@ -88,13 +108,19 @@ class CoupledBatchData:
             sample_dim_name=sample_dim_name,
             label_encoding=ocean_label_encoding,
         )
+        ice_data = BatchData.from_sample_tuples(
+            [x.ice for x in samples],
+            horizontal_dims=ice_horizontal_dims,
+            sample_dim_name=sample_dim_name,
+            label_encoding=ice_label_encoding,
+        )
         atmosphere_data = BatchData.from_sample_tuples(
             [x.atmosphere for x in samples],
             horizontal_dims=atmosphere_horizontal_dims,
             sample_dim_name=sample_dim_name,
             label_encoding=atmosphere_label_encoding,
         )
-        return CoupledBatchData.new_on_cpu(ocean_data, atmosphere_data)
+        return CoupledBatchData.new_on_cpu(ocean_data, ice_data, atmosphere_data)
 
     def get_start(
         self: SelfType,
@@ -108,6 +134,10 @@ class CoupledBatchData:
                 requirements.ocean.names,
                 requirements.ocean.n_timesteps,
             ),
+            ice_data=self.ice_data.get_start(
+                requirements.ice.names,
+                requirements.ice.n_timesteps,
+            ),
             atmosphere_data=self.atmosphere_data.get_start(
                 requirements.atmosphere.names,
                 requirements.atmosphere.n_timesteps,
@@ -117,6 +147,7 @@ class CoupledBatchData:
     def prepend(self: SelfType, initial_condition: CoupledPrognosticState) -> SelfType:
         return self.__class__(
             ocean_data=self.ocean_data.prepend(initial_condition.ocean_data),
+            ice_data=self.ice_data.prepend(initial_condition.ice_data),
             atmosphere_data=self.atmosphere_data.prepend(
                 initial_condition.atmosphere_data
             ),
@@ -125,10 +156,12 @@ class CoupledBatchData:
     def remove_initial_condition(
         self: SelfType,
         n_ic_timesteps_ocean: int,
+        n_ic_timesteps_ice: int,
         n_ic_timesteps_atmosphere: int,
     ) -> SelfType:
         return self.__class__(
             ocean_data=self.ocean_data.remove_initial_condition(n_ic_timesteps_ocean),
+            ice_data=self.ice_data.remove_initial_condition(n_ic_timesteps_ice),
             atmosphere_data=self.atmosphere_data.remove_initial_condition(
                 n_ic_timesteps_atmosphere
             ),
@@ -137,12 +170,16 @@ class CoupledBatchData:
     def compute_derived_variables(
         self: SelfType,
         ocean_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict],
+        ice_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict],
         atmosphere_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict],
         forcing_data: SelfType,
     ) -> SelfType:
         return self.__class__(
             ocean_data=self.ocean_data.compute_derived_variables(
                 ocean_derive_func, forcing_data.ocean_data
+            ),
+            ice_data=self.ice_data.compute_derived_variables(
+                ice_derive_func, forcing_data.ice_data
             ),
             atmosphere_data=self.atmosphere_data.compute_derived_variables(
                 atmosphere_derive_func, forcing_data.atmosphere_data
@@ -151,6 +188,7 @@ class CoupledBatchData:
 
     def pin_memory(self: SelfType) -> SelfType:
         self.ocean_data = self.ocean_data.pin_memory()
+        self.ice_data = self.ice_data.pin_memory()
         self.atmosphere_data = self.atmosphere_data.pin_memory()
         return self
 
@@ -163,6 +201,7 @@ class CoupledPairedData:
     """
 
     ocean_data: PairedData
+    ice_data: PairedData
     atmosphere_data: PairedData
 
     @classmethod
@@ -178,6 +217,12 @@ class CoupledPairedData:
                 "Prediction and target ocean time coordinate must be the same."
             )
         if not np.all(
+            prediction.ice_data.time.values == reference.ice_data.time.values
+        ):
+            raise ValueError(
+                "Prediction and target ice time coordinate must be the same."
+            )
+        if not np.all(
             prediction.atmosphere_data.time.values
             == reference.atmosphere_data.time.values
         ):
@@ -190,6 +235,12 @@ class CoupledPairedData:
                 reference=reference.ocean_data.data,
                 time=prediction.ocean_data.time,
                 labels=prediction.ocean_data.labels,
+            ),
+            ice_data=PairedData(
+                prediction=prediction.ice_data.data,
+                reference=reference.ice_data.data,
+                time=prediction.ice_data.time,
+                labels=prediction.ice_data.labels,
             ),
             atmosphere_data=PairedData(
                 prediction=prediction.atmosphere_data.data,

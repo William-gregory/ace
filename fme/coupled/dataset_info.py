@@ -16,9 +16,11 @@ class CoupledDatasetInfo:
     def __init__(
         self,
         ocean: DatasetInfo,
+        ice: DatasetInfo,
         atmosphere: DatasetInfo,
     ):
         self.ocean = ocean
+        self.ice = ice
         self.atmosphere = atmosphere
 
     @property
@@ -31,11 +33,12 @@ class CoupledDatasetInfo:
     def __eq__(self, other):
         if not isinstance(other, CoupledDatasetInfo):
             return False
-        return self.ocean == other.ocean and self.atmosphere == other.atmosphere
+        return self.ocean == other.ocean and self.ice == other.ice and self.atmosphere == other.atmosphere
 
-    def to_state(self) -> dict[Literal["ocean", "atmosphere"], dict[str, Any]]:
+    def to_state(self) -> dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]:
         return {
             "ocean": self.ocean.to_state(),
+            "ice": self.ice.to_state(),
             "atmosphere": self.atmosphere.to_state(),
         }
 
@@ -43,15 +46,17 @@ class CoupledDatasetInfo:
     def horizontal_coordinates(self) -> CoupledHorizontalCoordinates:
         return CoupledHorizontalCoordinates(
             ocean=self.ocean.horizontal_coordinates,
+            ice=self.ice.horizontal_coordinates,
             atmosphere=self.atmosphere.horizontal_coordinates,
         )
 
     @classmethod
     def from_state(
-        cls, state: dict[Literal["ocean", "atmosphere"], dict[str, Any]]
+        cls, state: dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]
     ) -> "CoupledDatasetInfo":
         return cls(
             ocean=DatasetInfo.from_state(state["ocean"]),
+            ice=DatasetInfo.from_state(state["ice"]),
             atmosphere=DatasetInfo.from_state(state["atmosphere"]),
         )
 
@@ -59,9 +64,10 @@ class CoupledDatasetInfo:
         self, variable_metadata: dict[str, Any]
     ) -> "CoupledDatasetInfo":
         """
-        Update the variable metadata for both ocean and atmosphere datasets.
+        Update the variable metadata for ocean, ice, and atmosphere datasets.
         """
         return CoupledDatasetInfo(
             ocean=self.ocean.update_variable_metadata(variable_metadata),
+            ice=self.ice.update_variable_metadata(variable_metadata),
             atmosphere=self.atmosphere.update_variable_metadata(variable_metadata),
         )

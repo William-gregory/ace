@@ -71,6 +71,7 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         output_dir: str | None = None,
         variable_metadata: Mapping[str, VariableMetadata] | None = None,
         ocean_channel_mean_names: Sequence[str] | None = None,
+        ice_channel_mean_names: Sequence[str] | None = None,
         atmosphere_channel_mean_names: Sequence[str] | None = None,
     ):
         """
@@ -82,6 +83,7 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
             loss_scaling: Optional coupled mapping of variables and their
                 scaling factors used in loss computation for the stepper.
             ocean_channel_mean_names: Names to include in ocean channel-mean metrics.
+            ice_channel_mean_names: Names to include in ice channel-mean metrics.
             atmosphere_channel_mean_names: Names to include in atmosphere channel-mean
                 metrics.
 
@@ -89,6 +91,7 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         self._dist = Distributed.get_instance()
         self._loss = torch.tensor(0.0, device=get_device())
         self._loss_ocean = torch.tensor(0.0, device=get_device())
+        self._loss_ice = torch.tensor(0.0, device=get_device())
         self._loss_atmos = torch.tensor(0.0, device=get_device())
         self._n_batches = 0
         self._aggregators = {
@@ -102,6 +105,17 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
                 ),
                 loss_scaling=loss_scaling.ocean,
                 channel_mean_names=ocean_channel_mean_names,
+            ),
+            "ice": OneStepAggregator_(
+                dataset_info.ice,
+                save_diagnostics=save_diagnostics,
+                output_dir=(
+                    os.path.join(output_dir, "ice")
+                    if output_dir is not None
+                    else None
+                ),
+                loss_scaling=loss_scaling.ice,
+                channel_mean_names=ice_channel_mean_names,
             ),
             "atmosphere": OneStepAggregator_(
                 dataset_info.atmosphere,
@@ -118,6 +132,9 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         self._num_channels_ocean: int | None = None
         if ocean_channel_mean_names is not None:
             self._num_channels_ocean = len(ocean_channel_mean_names)
+        self._num_channels_ice: int | None = None
+        if ice_channel_mean_names is not None:
+            self._num_channels_ice = len(ice_channel_mean_names)
         self._num_channels_atmos: int | None = None
         if atmosphere_channel_mean_names is not None:
             self._num_channels_atmos = len(atmosphere_channel_mean_names)
@@ -129,12 +146,16 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
     ):
         if self._num_channels_ocean is None:
             self._num_channels_ocean = len(batch.ocean.gen_data)
+        if self._num_channels_ice is None:
+            self._num_channels_ice = len(batch.ice.gen_data)
         if self._num_channels_atmos is None:
             self._num_channels_atmos = len(batch.atmosphere.gen_data)
         self._loss += batch.total_metrics["loss"]
         self._loss_ocean += batch.ocean.metrics["loss/ocean"]
+        self._loss_ice += batch.ocean.metrics["loss/ice"]
         self._loss_atmos += batch.atmosphere.metrics["loss/atmosphere"]
         self._aggregators["ocean"].record_batch(batch.ocean)
+        self._aggregators["ice"].record_batch(batch.ice)
         self._aggregators["atmosphere"].record_batch(batch.atmosphere)
         self._n_batches += 1
 
@@ -149,25 +170,30 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         if self._num_channels_ocean is None or self._num_channels_atmos is None:
             raise ValueError("No data recorded.")
         ocean_logs = self._aggregators["ocean"].get_logs(label)
+        ice_logs = self._aggregators["ice"].get_logs(label)
         atmos_logs = self._aggregators["atmosphere"].get_logs(label)
         # loss is not included in component metrics so these are both nans
         ocean_logs.pop(f"{label}/mean/loss")
+        ice_logs.pop(f"{label}/mean/loss")
         atmos_logs.pop(f"{label}/mean/loss")
         prefix = f"{label}/mean_norm/weighted_rmse"
         # rename channel_mean RMSEs
         ocean_logs[f"{prefix}/ocean_channel_mean"] = ocean_logs.pop(
             f"{prefix}/channel_mean"
         )
+        ice_logs[f"{prefix}/ice_channel_mean"] = ice_logs.pop(
+            f"{prefix}/channel_mean"
+        )
         atmos_logs[f"{prefix}/atmosphere_channel_mean"] = atmos_logs.pop(
             f"{prefix}/channel_mean"
         )
-        duplicates = set(ocean_logs.keys()) & set(atmos_logs.keys())
+        duplicates = set(ocean_logs.keys()) & set(ice_logs.keys()) & set(atmos_logs.keys())
         if len(duplicates) > 0:
             raise ValueError(
-                "Duplicate keys found in ocean and atmosphere "
+                "Duplicate keys found in ocean, ice, and atmosphere "
                 f"{label} logs: {duplicates}."
             )
-        logs = {**ocean_logs, **atmos_logs}
+        logs = {**ocean_logs, **ice_logs, **atmos_logs}
         loss = self._loss / self._n_batches
         logs[f"{label}/mean/loss"] = float(
             self._dist.reduce_mean(loss.detach()).cpu().numpy()
@@ -175,6 +201,10 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         loss_ocean = self._loss_ocean / self._n_batches
         logs[f"{label}/mean/loss/ocean"] = float(
             self._dist.reduce_mean(loss_ocean.detach()).cpu().numpy()
+        )
+        loss_ice = self._loss_ice / self._n_batches
+        logs[f"{label}/mean/loss/ice"] = float(
+            self._dist.reduce_mean(loss_ice.detach()).cpu().numpy()
         )
         loss_atmos = self._loss_atmos / self._n_batches
         logs[f"{label}/mean/loss/atmosphere"] = float(
@@ -185,8 +215,8 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
     @torch.no_grad()
     def flush_diagnostics(self, subdir: str | None = None):
         """
-        Flushes diagnostics to netCDF files, in separate directories for ocean and
-        atmosphere.
+        Flushes diagnostics to netCDF files, in separate directories for ocean, 
+        ice, and atmosphere.
         """
         for aggregator in self._aggregators.values():
             aggregator.flush_diagnostics(subdir)
@@ -228,13 +258,16 @@ class InferenceEvaluatorAggregatorConfig:
         self,
         dataset_info: CoupledDatasetInfo,
         n_timesteps_ocean: int,
+        n_timesteps_ice: int,
         n_timesteps_atmosphere: int,
         initial_time: xr.DataArray,
         ocean_normalize: Callable[[TensorMapping], TensorDict],
+        ice_normalize: Callable[[TensorMapping], TensorDict],
         atmosphere_normalize: Callable[[TensorMapping], TensorDict],
         save_diagnostics: bool = True,
         output_dir: str | None = None,
         ocean_channel_mean_names: Sequence[str] | None = None,
+        ice_channel_mean_names: Sequence[str] | None = None,
         atmosphere_channel_mean_names: Sequence[str] | None = None,
     ) -> "InferenceEvaluatorAggregator":
         if self.monthly_reference_data is None:
@@ -266,6 +299,7 @@ class InferenceEvaluatorAggregatorConfig:
         return InferenceEvaluatorAggregator(
             dataset_info=dataset_info,
             n_timesteps_ocean=n_timesteps_ocean,
+            n_timesteps_ice=n_timesteps_ice,
             n_timesteps_atmosphere=n_timesteps_atmosphere,
             initial_time=initial_time,
             save_diagnostics=save_diagnostics,
@@ -280,21 +314,24 @@ class InferenceEvaluatorAggregatorConfig:
             monthly_reference_data=monthly_reference_data,
             time_mean_reference_data=time_mean,
             ocean_normalize=ocean_normalize,
+            ice_normalize=ice_normalize,
             atmosphere_normalize=atmosphere_normalize,
             ocean_channel_mean_names=ocean_channel_mean_names,
+            ice_channel_mean_names=ice_channel_mean_names,
             atmosphere_channel_mean_names=atmosphere_channel_mean_names,
         )
 
 
 def _combine_logs(
     ocean_logs: InferenceLogs,
+    ice_logs: InferenceLogs,
     atmos_logs: InferenceLogs,
     n_atmos_steps_per_ocean_step: int,
     step_key="mean/forecast_step",
 ) -> InferenceLogs:
     """
-    Combines ocean and atmosphere logs into a single list of logs such that
-    the ocean logs are aligned to the atmosphere's faster timestep, e.g.
+    Combines ocean, ice, and atmosphere logs into a single list of logs such
+    that the ocean logs are aligned to the atmosphere or ice's faster timestep, e.g.
 
     _combine_logs(
         ocean_logs=[
@@ -350,9 +387,11 @@ class InferenceEvaluatorAggregator(
         self,
         dataset_info: CoupledDatasetInfo,
         n_timesteps_ocean: int,
+        n_timesteps_ice: int,
         n_timesteps_atmosphere: int,
         initial_time: xr.DataArray,
         ocean_normalize: Callable[[TensorMapping], TensorDict],
+        ice_normalize: Callable[[TensorMapping], TensorDict],
         atmosphere_normalize: Callable[[TensorMapping], TensorDict],
         save_diagnostics: bool = True,
         output_dir: str | None = None,
@@ -366,6 +405,7 @@ class InferenceEvaluatorAggregator(
         log_histograms: bool = False,
         time_mean_reference_data: xr.Dataset | None = None,
         ocean_channel_mean_names: Sequence[str] | None = None,
+        ice_channel_mean_names: Sequence[str] | None = None,
         atmosphere_channel_mean_names: Sequence[str] | None = None,
     ):
         self._record_ocean_step_20 = n_timesteps_ocean >= 20
@@ -390,6 +430,29 @@ class InferenceEvaluatorAggregator(
                 save_diagnostics=save_diagnostics,
                 output_dir=(
                     os.path.join(output_dir, "ocean")
+                    if output_dir is not None
+                    else None
+                ),
+            ),
+            "ice": InferenceEvaluatorAggregator_(
+                dataset_info=dataset_info.ice,
+                n_timesteps=n_timesteps_ice,
+                initial_time=initial_time,
+                log_histograms=log_histograms,
+                log_video=log_video,
+                enable_extended_videos=enable_extended_videos,
+                log_zonal_mean_images=log_zonal_mean_images,
+                log_seasonal_means=log_seasonal_means,
+                log_global_mean_time_series=log_global_mean_time_series,
+                log_global_mean_norm_time_series=log_global_mean_norm_time_series,
+                monthly_reference_data=monthly_reference_data,
+                time_mean_reference_data=time_mean_reference_data,
+                record_step_20=self._record_ocean_step_20,
+                channel_mean_names=ice_channel_mean_names,
+                normalize=ice_normalize,
+                save_diagnostics=save_diagnostics,
+                output_dir=(
+                    os.path.join(output_dir, "ice")
                     if output_dir is not None
                     else None
                 ),
@@ -422,6 +485,9 @@ class InferenceEvaluatorAggregator(
         self._num_channels_ocean: int | None = None
         if ocean_channel_mean_names is not None:
             self._num_channels_ocean = len(ocean_channel_mean_names)
+        self._num_channels_ice: int | None = None
+        if ice_channel_mean_names is not None:
+            self._num_channels_ice = len(ice_channel_mean_names)
         self._num_channels_atmos: int | None = None
         if atmosphere_channel_mean_names is not None:
             self._num_channels_atmos = len(atmosphere_channel_mean_names)
@@ -429,6 +495,10 @@ class InferenceEvaluatorAggregator(
     @property
     def ocean(self) -> InferenceEvaluatorAggregator_:
         return self._aggregators["ocean"]
+    
+    @property
+    def ice(self) -> InferenceEvaluatorAggregator_:
+        return self._aggregators["ice"]
 
     @property
     def atmosphere(self) -> InferenceEvaluatorAggregator_:
@@ -438,13 +508,17 @@ class InferenceEvaluatorAggregator(
     def record_batch(self, data: CoupledPairedData) -> InferenceLogs:
         if self._num_channels_ocean is None:
             self._num_channels_ocean = len(data.ocean_data.prediction)
+        if self._num_channels_ice is None:
+            self._num_channels_ocean = len(data.ice_data.prediction)
         if self._num_channels_atmos is None:
             self._num_channels_atmos = len(data.atmosphere_data.prediction)
         ocean_logs = self.ocean.record_batch(data.ocean_data)
+        ice_logs = self.ice.record_batch(data.ice_data)
         atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
         n_times_ocean = data.ocean_data.time["time"].size
+        n_times_ice = data.ice_data.time["time"].size
         n_times_atmos = data.atmosphere_data.time["time"].size
-        return _combine_logs(ocean_logs, atmos_logs, n_times_atmos // n_times_ocean)
+        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_times_atmos // n_times_ocean)
 
     @torch.no_grad()
     def record_initial_condition(
@@ -457,27 +531,32 @@ class InferenceEvaluatorAggregator(
         May only be recorded once, before any calls to record_batch.
         """
         ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
+        ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
         atmos_logs = self.atmosphere.record_initial_condition(
             initial_condition.atmosphere_data
         )
         # initial condition "steps" must align, so record both
-        return _combine_logs(ocean_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
+        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
 
     @torch.no_grad()
     def get_summary_logs(self) -> InferenceLog:
         if self._num_channels_ocean is None or self._num_channels_atmos is None:
             raise ValueError("No data recorded.")
         ocean_logs = self.ocean.get_summary_logs()
+        ice_logs = self.ice.get_summary_logs()
         atmos_logs = self.atmosphere.get_summary_logs()
         prefix = "time_mean_norm/rmse"
         ocean_channel_mean = ocean_logs.pop(f"{prefix}/channel_mean")
+        ice_channel_mean = ice_logs.pop(f"{prefix}/channel_mean")
         atmos_channel_mean = atmos_logs.pop(f"{prefix}/channel_mean")
         ocean_logs[f"{prefix}/ocean_channel_mean"] = ocean_channel_mean
+        ice_logs[f"{prefix}/ice_channel_mean"] = ice_channel_mean
         atmos_logs[f"{prefix}/atmosphere_channel_mean"] = atmos_channel_mean
         channel_mean = (
             ocean_channel_mean * self._num_channels_ocean
+            + ice_channel_mean * self._num_channels_ice
             + atmos_channel_mean * self._num_channels_atmos
-        ) / (self._num_channels_ocean + self._num_channels_atmos)
+        ) / (self._num_channels_ocean + self._num_channels_ice + self._num_channels_atmos)
         prefix = "mean_step_20_norm/weighted_rmse"
         if self._record_atmos_step_20:
             atmos_logs[f"{prefix}/atmosphere_channel_mean"] = atmos_logs.pop(
@@ -487,23 +566,28 @@ class InferenceEvaluatorAggregator(
             ocean_logs[f"{prefix}/ocean_channel_mean"] = ocean_logs.pop(
                 f"{prefix}/channel_mean"
             )
-        duplicates = set(ocean_logs.keys()) & set(atmos_logs.keys())
+        if self._record_ice_step_20:
+            ice_logs[f"{prefix}/ice_channel_mean"] = ice_logs.pop(
+                f"{prefix}/channel_mean"
+            )
+        duplicates = set(ocean_logs.keys()) & set(ice_logs.keys()) & set(atmos_logs.keys())
         if len(duplicates) > 0:
             raise ValueError(
-                "Duplicate keys found in ocean and atmosphere "
+                "Duplicate keys found in ocean, ice, and atmosphere "
                 f"inference evaluator aggregator logs: {duplicates}."
             )
         return {
             "time_mean_norm/rmse/channel_mean": channel_mean,
             **ocean_logs,
+            **ice_logs,
             **atmos_logs,
         }
 
     @torch.no_grad()
     def flush_diagnostics(self, subdir: str | None = None):
         """
-        Flushes diagnostics to netCDF files, in separate directories for ocean and
-        atmosphere.
+        Flushes diagnostics to netCDF files, in separate directories for ocean, ice
+        and atmosphere.
         """
         for aggregator in self._aggregators.values():
             aggregator.flush_diagnostics(subdir)
@@ -518,16 +602,19 @@ class InferenceAggregatorConfig:
         log_global_mean_time_series: Whether to log global mean time series metrics.
         atmosphere_time_mean_reference_data: Path to atmosphere reference time means.
         ocean_time_mean_reference_data: Path to ocean reference time means.
+        ice_time_mean_reference_data: Path to ice reference time means.
     """
 
     log_global_mean_time_series: bool = True
     atmosphere_time_mean_reference_data: str | None = None
     ocean_time_mean_reference_data: str | None = None
+    ice_time_mean_reference_data: str | None = None
 
     def build(
         self,
         dataset_info: CoupledDatasetInfo,
         n_timesteps_ocean: int,
+        n_timesteps_ice: int,
         n_timesteps_atmosphere: int,
         output_dir: str,
     ) -> "InferenceAggregator":
@@ -543,14 +630,22 @@ class InferenceAggregatorConfig:
             ocean_time_mean = xr.open_dataset(
                 self.ocean_time_mean_reference_data, decode_timedelta=False
             )
+        if self.ice_time_mean_reference_data is None:
+            ice_time_mean = None
+        else:
+            ice_time_mean = xr.open_dataset(
+                self.ice_time_mean_reference_data, decode_timedelta=False
+            )
         return InferenceAggregator(
             dataset_info=dataset_info,
             n_timesteps_ocean=n_timesteps_ocean,
+            n_timesteps_ice=n_timesteps_ice,
             n_timesteps_atmosphere=n_timesteps_atmosphere,
             output_dir=output_dir,
             log_global_mean_time_series=self.log_global_mean_time_series,
             atmosphere_time_mean_reference_data=atmos_time_mean,
             ocean_time_mean_reference_data=ocean_time_mean,
+            ice_time_mean_reference_data=ice_time_mean,
         )
 
 
@@ -571,11 +666,13 @@ class InferenceAggregator(
         self,
         dataset_info: CoupledDatasetInfo,
         n_timesteps_ocean: int,
+        n_timesteps_ice: int,
         n_timesteps_atmosphere: int,
         save_diagnostics: bool = True,
         output_dir: str | None = None,
         atmosphere_time_mean_reference_data: xr.Dataset | None = None,
         ocean_time_mean_reference_data: xr.Dataset | None = None,
+        ice_time_mean_reference_data: xr.Dataset | None = None,
         log_global_mean_time_series: bool = True,
     ):
         """
@@ -587,6 +684,7 @@ class InferenceAggregator(
             output_dir: Directory to save diagnostic output.
             atmosphere_time_mean_reference_data: Reference time means for atmosphere.
             ocean_time_mean_reference_data: Reference time means for ocean.
+            ice_time_mean_reference_data: Reference time means for ice.
             log_global_mean_time_series: Whether to log global mean time series metrics.
         """
         if save_diagnostics and output_dir is None:
@@ -601,6 +699,18 @@ class InferenceAggregator(
                 save_diagnostics=save_diagnostics,
                 output_dir=(
                     os.path.join(output_dir, "ocean")
+                    if output_dir is not None
+                    else None
+                ),
+                log_global_mean_time_series=log_global_mean_time_series,
+                time_mean_reference_data=ocean_time_mean_reference_data,
+            ),
+            "ice": InferenceAggregator_(
+                dataset_info=dataset_info.ice,
+                n_timesteps=n_timesteps_ice,
+                save_diagnostics=save_diagnostics,
+                output_dir=(
+                    os.path.join(output_dir, "ice")
                     if output_dir is not None
                     else None
                 ),
@@ -626,6 +736,10 @@ class InferenceAggregator(
         return self._aggregators["ocean"]
 
     @property
+    def ice(self) -> InferenceAggregator_:
+        return self._aggregators["ice"]
+
+    @property
     def atmosphere(self) -> InferenceAggregator_:
         return self._aggregators["atmosphere"]
 
@@ -636,10 +750,12 @@ class InferenceAggregator(
     @torch.no_grad()
     def record_batch(self, data: CoupledPairedData) -> InferenceLogs:
         ocean_logs = self.ocean.record_batch(data.ocean_data)
+        ice_logs = self.ice.record_batch(data.ice_data)
         atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
         n_times_ocean = data.ocean_data.time["time"].size
+        n_times_ice = data.ice_data.time["time"].size
         n_times_atmos = data.atmosphere_data.time["time"].size
-        return _combine_logs(ocean_logs, atmos_logs, n_times_atmos // n_times_ocean)
+        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_times_atmos // n_times_ocean)
 
     @torch.no_grad()
     def record_initial_condition(
@@ -652,31 +768,34 @@ class InferenceAggregator(
         May only be recorded once, before any calls to record_batch.
         """
         ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
+        ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
         atmos_logs = self.atmosphere.record_initial_condition(
             initial_condition.atmosphere_data
         )
         # initial condition "steps" must align, so record both
-        return _combine_logs(ocean_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
+        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
 
     def get_summary_logs(self) -> InferenceLog:
         ocean_logs = self.ocean.get_summary_logs()
+        ice_logs = self.ice.get_summary_logs()
         atmos_logs = self.atmosphere.get_summary_logs()
-        duplicates = set(ocean_logs.keys()) & set(atmos_logs.keys())
+        duplicates = set(ocean_logs.keys()) & set(ice_logs.keys()) & set(atmos_logs.keys())
         if len(duplicates) > 0:
             raise ValueError(
-                "Duplicate keys found in ocean and atmosphere "
+                "Duplicate keys found in ocean, ice, and atmosphere "
                 f"inference evaluator aggregator logs: {duplicates}."
             )
         return {
             **ocean_logs,
+            **ice_logs,
             **atmos_logs,
         }
 
     @torch.no_grad()
     def flush_diagnostics(self, subdir: str | None = None):
         """
-        Flushes diagnostics to netCDF files, in separate directories for ocean and
-        atmosphere.
+        Flushes diagnostics to netCDF files, in separate directories for ocean, 
+        ice, and atmosphere.
         """
         for aggregator in self._aggregators.values():
             aggregator.flush_diagnostics(subdir)

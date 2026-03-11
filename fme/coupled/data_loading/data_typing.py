@@ -22,13 +22,19 @@ class CoupledCoords:
     """
 
     ocean_vertical: dict[str, np.ndarray]
+    ice_vertical: dict[str, np.ndarray]
     atmosphere_vertical: dict[str, np.ndarray]
     ocean_horizontal: dict[str, np.ndarray]
+    ice_horizontal: dict[str, np.ndarray]
     atmosphere_horizontal: dict[str, np.ndarray]
 
     @property
     def ocean(self) -> dict[str, np.ndarray]:
         return {**self.ocean_vertical, **self.ocean_horizontal}
+
+    @property
+    def ice(self) -> dict[str, np.ndarray]:
+        return {**self.ice_vertical, **self.ice_horizontal}
 
     @property
     def atmosphere(self) -> dict[str, np.ndarray]:
@@ -39,19 +45,23 @@ class CoupledVerticalCoordinate:
     def __init__(
         self,
         ocean: OptionalDepthCoordinate,
+        ice: OptionalDepthCoordinate,
         atmosphere: OptionalHybridSigmaPressureCoordinate,
     ):
         self.ocean = ocean
+        self.ice = ice
         self.atmosphere = atmosphere
 
     def __eq__(self, other):
         if not isinstance(other, CoupledVerticalCoordinate):
             return False
-        return self.ocean == other.ocean and self.atmosphere == other.atmosphere
+        return self.ocean == other.ocean and and self.ice == other.ice and self.atmosphere == other.atmosphere
 
     def to(self, device: torch.device) -> "CoupledVerticalCoordinate":
         return CoupledVerticalCoordinate(
-            ocean=self.ocean.to(device), atmosphere=self.atmosphere.to(device)
+            ocean=self.ocean.to(device),
+            ice=self.ice.to(device),
+            atmosphere=self.atmosphere.to(device)
         )
 
 
@@ -59,19 +69,23 @@ class CoupledHorizontalCoordinates:
     def __init__(
         self,
         ocean: HorizontalCoordinates,
+        ice: HorizontalCoordinates,
         atmosphere: HorizontalCoordinates,
     ):
         self.ocean = ocean
+        self.ice = ice
         self.atmosphere = atmosphere
 
     def __eq__(self, other):
         if not isinstance(other, CoupledHorizontalCoordinates):
             return False
-        return self.ocean == other.ocean and self.atmosphere == other.atmosphere
+        return self.ocean == other.ocean and self.ice == other.ice and self.atmosphere == other.atmosphere
 
     def to(self, device: torch.device) -> "CoupledHorizontalCoordinates":
         return CoupledHorizontalCoordinates(
-            ocean=self.ocean.to(device), atmosphere=self.atmosphere.to(device)
+            ocean=self.ocean.to(device),
+            ice=self.ice.to(device),
+            atmosphere=self.atmosphere.to(device)
         )
 
 
@@ -79,18 +93,28 @@ class CoupledDatasetProperties:
     def __init__(
         self,
         ocean: DatasetProperties,
+        ice: DatasetProperties,
         atmosphere: DatasetProperties,
     ):
         self.ocean = ocean
+        self.ice = ice
         self.atmosphere = atmosphere
         ocean_coord = ocean.vertical_coordinate
+        ice_coord = ice.vertical_coordinate
         atmos_coord = atmosphere.vertical_coordinate
         assert isinstance(ocean_coord, OptionalDepthCoordinate)
+        assert isinstance(ice_coord, OptionalDepthCoordinate)
         assert isinstance(atmos_coord, OptionalHybridSigmaPressureCoordinate)
 
-        self._vertical_coordinate = CoupledVerticalCoordinate(ocean_coord, atmos_coord)
+        self._vertical_coordinate = CoupledVerticalCoordinate(
+            ocean_coord,
+            ice_coord,
+            atmos_coord
+        )
         self._horizontal_coordinates = CoupledHorizontalCoordinates(
-            ocean.horizontal_coordinates, atmosphere.horizontal_coordinates
+            ocean.horizontal_coordinates,
+            ice.horizontal_coordinates,
+            atmosphere.horizontal_coordinates
         )
 
     @property
@@ -104,6 +128,11 @@ class CoupledDatasetProperties:
         return self.ocean.timestep
 
     @property
+    def ice_timestep(self) -> datetime.timedelta:
+        assert self.ice.timestep is not None
+        return self.ice.timestep
+
+    @property
     def vertical_coordinate(self) -> CoupledVerticalCoordinate:
         return self._vertical_coordinate
 
@@ -115,6 +144,7 @@ class CoupledDatasetProperties:
     def variable_metadata(self) -> dict[str, VariableMetadata]:
         metadata: dict[str, VariableMetadata] = {}
         metadata.update(self.ocean.variable_metadata)
+        metadata.update(self.ice.variable_metadata)
         metadata.update(self.atmosphere.variable_metadata)
         return metadata
 
@@ -124,7 +154,7 @@ class CoupledDatasetProperties:
 
     @property
     def is_remote(self) -> bool:
-        return self.ocean.is_remote or self.atmosphere.is_remote
+        return self.ocean.is_remote or or self.ice.is_remote or self.atmosphere.is_remote
 
     @property
     def n_inner_steps(self) -> int:
@@ -134,14 +164,17 @@ class CoupledDatasetProperties:
     def coords(self) -> CoupledCoords:
         return CoupledCoords(
             ocean_vertical=self.vertical_coordinate.ocean.coords,
+            ice_vertical=self.vertical_coordinate.ice.coords,
             atmosphere_vertical=self.vertical_coordinate.atmosphere.coords,
             ocean_horizontal=dict(self.horizontal_coordinates.ocean.coords),
+            ice_horizontal=dict(self.horizontal_coordinates.ice.coords),
             atmosphere_horizontal=dict(self.horizontal_coordinates.atmosphere.coords),
         )
 
     def to_device(self) -> "CoupledDatasetProperties":
         return CoupledDatasetProperties(
             ocean=self.ocean.to_device(),
+            ice=self.ice.to_device(),
             atmosphere=self.atmosphere.to_device(),
         )
 
@@ -154,11 +187,13 @@ class CoupledDatasetProperties:
             )
         self.atmosphere.update(other.atmosphere)
         self.ocean.update(other.ocean)
+        self.ice.update(other.ice)
 
 
 @dataclasses.dataclass
 class CoupledDatasetItem:
     ocean: DatasetItem
+    ice: DatasetItem
     atmosphere: DatasetItem
 
 
@@ -166,6 +201,7 @@ class CoupledDataset:
     def __init__(
         self,
         ocean: DatasetABC,
+        ice: DatasetABC,
         atmosphere: DatasetABC,
         properties: CoupledDatasetProperties,
         n_steps_fast: int,
@@ -173,11 +209,13 @@ class CoupledDataset:
         """
         Args:
             ocean: ocean dataset.
+            ice: ice dataset.
             atmosphere: atmosphere dataset.
             properties: the coupled dataset properties.
             n_steps_fast: number of atmosphere timesteps per ocean timestep.
         """
         self._ocean = ocean
+        self._ice = ice
         if properties.ocean_timestep != properties.atmosphere_timestep * n_steps_fast:
             raise ValueError(
                 "Ocean and atmosphere timesteps must be consistent with "
@@ -239,4 +277,5 @@ class CoupledDataset:
 
     def set_epoch(self, epoch: int):
         self._ocean.set_epoch(epoch)
+        self._ice.set_epoch(epoch)
         self._atmosphere.set_epoch(epoch)
