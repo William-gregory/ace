@@ -49,12 +49,23 @@ def run_coupled_dataset_comparison(
     def _restrict_to_all_names(batch: CoupledBatchData) -> CoupledBatchData:
         if restrict_to_all_names is None:
             return batch
-        return CoupledBatchData(
-            ocean_data=batch.ocean_data.subset_names(restrict_to_all_names.ocean),
-            atmosphere_data=batch.atmosphere_data.subset_names(
-                restrict_to_all_names.atmosphere
-            ),
-        )
+        else:
+            ocean_batch = None
+            ice_batch = None
+            atmos_batch = None
+            if batch.ocean_data is not None:
+                ocean_batch = batch.ocean_data.subset_names(restrict_to_all_names.ocean)
+            if batch.ice_data is not None:
+                ice_batch = batch.ice_data.subset_names(restrict_to_all_names.ice)
+            if batch.atmosphere_data is not None:
+                atmos_batch = batch.atmosphere_data.subset_names(
+                    restrict_to_all_names.atmosphere
+                )
+            return CoupledBatchData(
+                ocean_data=ocean_batch,
+                ice_data=ice_batch,
+                atmosphere_data=atmos_batch
+            )
 
     timer = GlobalTimer.get_instance()
     timer.start("data_loading")
@@ -77,7 +88,10 @@ def run_coupled_dataset_comparison(
             with timer.context("wandb_logging"):
                 record_logs(logs)
 
-        forward_steps_in_memory = list(pred.ocean_data.data.values())[0].size(1) - 1
+        if pred.ocean_data is not None:
+            forward_steps_in_memory = list(pred.ocean_data.data.values())[0].size(1) - 1
+        else:
+            forward_steps_in_memory = list(pred.ice_data.data.values())[0].size(1) - 1
         logging.info(
             f"Inference: Processing window {i + 1} of {n_windows}"
             f" spanning {i_time} to {i_time + forward_steps_in_memory} steps."

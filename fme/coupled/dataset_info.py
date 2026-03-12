@@ -15,9 +15,9 @@ class MissingCoupledDatasetInfo(ValueError):
 class CoupledDatasetInfo:
     def __init__(
         self,
-        ocean: DatasetInfo,
-        ice: DatasetInfo,
-        atmosphere: DatasetInfo,
+        ocean: DatasetInfo | None = None,
+        ice: DatasetInfo | None = None,
+        atmosphere: DatasetInfo | None = None,
     ):
         self.ocean = ocean
         self.ice = ice
@@ -33,22 +33,58 @@ class CoupledDatasetInfo:
     def __eq__(self, other):
         if not isinstance(other, CoupledDatasetInfo):
             return False
-        return self.ocean == other.ocean and self.ice == other.ice and self.atmosphere == other.atmosphere
+        ocean_check = self.ocean == other.ocean
+        ice_check = self.ice == other.ice
+        atmos_check = self.atmosphere == other.atmosphere
+        return ocean_check and ice_check and atmos_check
 
     def to_state(self) -> dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]:
-        return {
-            "ocean": self.ocean.to_state(),
-            "ice": self.ice.to_state(),
-            "atmosphere": self.atmosphere.to_state(),
-        }
+        if self.atmosphere is None:
+            ds = {
+                "ocean": self.ocean.to_state(),
+                "ice": self.ice.to_state(),
+            }
+        elif self.ice is None:
+            ds = {
+                "ocean": self.ocean.to_state(),
+                "atmosphere": self.atmosphere.to_state(),
+             }
+        elif self.ocean is None:
+            ds = {
+                "ice": self.ice.to_state(),
+                "atmosphere": self.atmosphere.to_state(),
+            }
+        else:
+            ds = {
+                "ocean": self.ocean.to_state(),
+                "ice": self.ice.to_state(),
+                "atmosphere": self.atmosphere.to_state(),
+            }
+        return ds
 
     @property
     def horizontal_coordinates(self) -> CoupledHorizontalCoordinates:
-        return CoupledHorizontalCoordinates(
-            ocean=self.ocean.horizontal_coordinates,
-            ice=self.ice.horizontal_coordinates,
-            atmosphere=self.atmosphere.horizontal_coordinates,
-        )
+        if self.atmosphere is None:
+            return CoupledHorizontalCoordinates(
+                ocean=self.ocean.horizontal_coordinates,
+                ice=self.ice.horizontal_coordinates,
+            )
+        elif self.ice is None:
+            return CoupledHorizontalCoordinates(
+                ocean=self.ocean.horizontal_coordinates,
+                atmosphere=self.atmosphere.horizontal_coordinates,
+            )
+        elif self.ocean is None:
+            return CoupledHorizontalCoordinates(
+                ice=self.ice.horizontal_coordinates,
+                atmosphere=self.atmosphere.horizontal_coordinates,
+            )
+        else:
+            return CoupledHorizontalCoordinates(
+                ocean=self.ocean.horizontal_coordinates,
+                ice=self.ice.horizontal_coordinates,
+                atmosphere=self.atmosphere.horizontal_coordinates,
+            )
 
     @classmethod
     def from_state(

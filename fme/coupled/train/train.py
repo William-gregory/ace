@@ -43,19 +43,47 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
     end_of_batch_ops = builder.get_end_of_batch_ops(stepper.modules)
 
     batch = next(iter(inference_data.loader))
-    initial_inference_times = batch.ocean_data.time.isel(time=0)
-    n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
-    n_timesteps_atmosphere = (
-        config.inference_n_coupled_steps * stepper.n_inner_steps
-        + stepper.atmosphere.n_ic_timesteps
-    )
+    n_timesteps_ocean = None
+    n_timesteps_ice = None
+    n_timesteps_atmosphere = None
+    if stepper.atmosphere is None:
+        initial_inference_times = batch.ocean_data.time.isel(time=0)
+        n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
+        n_timesteps_ice = (
+            config.inference_n_coupled_steps * stepper.n_inner_steps
+            + stepper.ice.n_ic_timesteps
+        )
+    elif stepper.ice is None:
+        initial_inference_times = batch.ocean_data.time.isel(time=0)
+        n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
+        n_timesteps_atmosphere = (
+            config.inference_n_coupled_steps * stepper.n_inner_steps
+            + stepper.atmosphere.n_ic_timesteps
+        )
+    elif stepper.ocean is None:
+        initial_inference_times = batch.ice_data.time.isel(time=0)
+        n_timesteps_ice = config.inference_n_coupled_steps
+        n_timesteps_atmosphere = config.inference_n_coupled_steps
+    else:
+        initial_inference_times = batch.ocean_data.time.isel(time=0)
+        n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
+        n_timesteps_ice = (
+            config.inference_n_coupled_steps * stepper.n_inner_steps
+            + stepper.ice.n_ic_timesteps
+        )
+        n_timesteps_atmosphere = (
+            config.inference_n_coupled_steps * stepper.n_inner_steps
+            + stepper.atmosphere.n_ic_timesteps
+        )
     aggregator_builder = CoupledAggregatorBuilder(
         inference_config=config.inference_aggregator,
         dataset_info=dataset_info.update_variable_metadata(variable_metadata),
         initial_inference_times=initial_inference_times,
         n_timesteps_ocean=n_timesteps_ocean,
         n_timesteps_atmosphere=n_timesteps_atmosphere,
+        n_timesteps_ice=n_timesteps_ice,
         ocean_normalize=stepper.ocean.normalizer.normalize,
+        ice_normalize=stepper.ice.normalizer.normalize,
         atmosphere_normalize=stepper.atmosphere.normalizer.normalize,
         loss_scaling=stepper.effective_loss_scaling,
         save_per_epoch_diagnostics=config.save_per_epoch_diagnostics,
@@ -82,13 +110,16 @@ class CoupledAggregatorBuilder(
         inference_config: InferenceEvaluatorAggregatorConfig,
         dataset_info: CoupledDatasetInfo,
         initial_inference_times: xr.DataArray,
-        n_timesteps_ocean: int,
-        n_timesteps_atmosphere: int,
         output_dir: str,
-        ocean_normalize: Callable[[TensorMapping], TensorDict],
-        atmosphere_normalize: Callable[[TensorMapping], TensorDict],
         loss_scaling: CoupledTensorMapping,
+        n_timesteps_ocean: int | None = None,
+        n_timesteps_ice: int | None = None,
+        n_timesteps_atmosphere: int | None = None,
+        ocean_normalize: Callable[[TensorMapping], TensorDict] | None = None,
+        ice_normalize: Callable[[TensorMapping], TensorDict] | None = None,
+        atmosphere_normalize: Callable[[TensorMapping], TensorDict] | None = None,
         ocean_channel_mean_names: Sequence[str] | None = None,
+        ice_channel_mean_names: Sequence[str] | None = None,
         atmosphere_channel_mean_names: Sequence[str] | None = None,
         save_per_epoch_diagnostics: bool = False,
     ):
@@ -96,12 +127,15 @@ class CoupledAggregatorBuilder(
         self.dataset_info = dataset_info
         self.initial_inference_times = initial_inference_times
         self.n_timesteps_ocean = n_timesteps_ocean
+        self.n_timesteps_ice = n_timesteps_ice
         self.n_timesteps_atmosphere = n_timesteps_atmosphere
         self.output_dir = output_dir
         self.ocean_normalize = ocean_normalize
+        self.ice_normalize = ice_normalize
         self.atmosphere_normalize = atmosphere_normalize
         self.loss_scaling = loss_scaling
         self.ocean_channel_mean_names = ocean_channel_mean_names
+        self.ice_channel_mean_names = ice_channel_mean_names
         self.atmosphere_channel_mean_names = atmosphere_channel_mean_names
         self.save_per_epoch_diagnostics = save_per_epoch_diagnostics
 
@@ -115,6 +149,7 @@ class CoupledAggregatorBuilder(
             output_dir=os.path.join(self.output_dir, "val"),
             loss_scaling=self.loss_scaling,
             ocean_channel_mean_names=self.ocean_channel_mean_names,
+            ice_channel_mean_names=self.ice_channel_mean_names,
             atmosphere_channel_mean_names=self.atmosphere_channel_mean_names,
         )
 
@@ -122,13 +157,16 @@ class CoupledAggregatorBuilder(
         return self.inference_config.build(
             dataset_info=self.dataset_info,
             n_timesteps_ocean=self.n_timesteps_ocean,
+            n_timesteps_ice=self.n_timesteps_ice,
             n_timesteps_atmosphere=self.n_timesteps_atmosphere,
             initial_time=self.initial_inference_times,
             ocean_normalize=self.ocean_normalize,
+            ice_normalize=self.ice_normalize,
             atmosphere_normalize=self.atmosphere_normalize,
             save_diagnostics=self.save_per_epoch_diagnostics,
             output_dir=os.path.join(self.output_dir, "inference"),
             ocean_channel_mean_names=self.ocean_channel_mean_names,
+            ice_channel_mean_names=self.ice_channel_mean_names,
             atmosphere_channel_mean_names=self.atmosphere_channel_mean_names,
         )
 

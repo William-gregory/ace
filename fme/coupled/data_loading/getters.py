@@ -44,22 +44,28 @@ from .inference import ExplicitIndices
 class CollateFn:
     def __init__(
         self,
-        ocean_horizontal_dims: list[str],
-        atmosphere_horizontal_dims: list[str],
+        ocean_horizontal_dims: list[str] | None = None,
+        ice_horizontal_dims: list[str] | None = None,
+        atmosphere_horizontal_dims: list[str] | None = None,
         ocean_label_encoding: LabelEncoding | None = None,
+        ice_label_encoding: LabelEncoding | None = None,
         atmosphere_label_encoding: LabelEncoding | None = None,
     ):
         self.ocean_horizontal_dims = ocean_horizontal_dims
+        self.ice_horizontal_dims = ice_horizontal_dims
         self.atmosphere_horizontal_dims = atmosphere_horizontal_dims
         self.ocean_label_encoding = ocean_label_encoding
+        self.ice_label_encoding = ice_label_encoding
         self.atmosphere_label_encoding = atmosphere_label_encoding
 
     def __call__(self, samples: list[CoupledDatasetItem]) -> CoupledBatchData:
         return CoupledBatchData.collate_fn(
             samples,
             ocean_horizontal_dims=self.ocean_horizontal_dims,
+            ice_horizontal_dims=self.ice_horizontal_dims,
             atmosphere_horizontal_dims=self.atmosphere_horizontal_dims,
             ocean_label_encoding=self.ocean_label_encoding,
+            ice_label_encoding=self.ice_label_encoding,
             atmosphere_label_encoding=self.atmosphere_label_encoding,
         )
 
@@ -68,18 +74,34 @@ def get_dataset(
     config: CoupledDatasetConfig, requirements: CoupledDataRequirements
 ) -> tuple[CoupledDataset, CoupledDatasetProperties]:
     ocean_reqs = requirements.ocean_requirements
+    ice_reqs = requirements.ice_requirements
     atmosphere_reqs = requirements.atmosphere_requirements
-    ocean: torch.utils.data.Dataset
-    atmosphere: torch.utils.data.Dataset
-    ocean, ocean_properties = config.ocean.build(
-        ocean_reqs.names, ocean_reqs.n_timesteps_schedule
+    ocean = None #: torch.utils.data.Dataset
+    ice = None #: torch.utils.data.Dataset
+    atmosphere = None #: #torch.utils.data.Dataset
+    ocean_properties = None
+    ice_properties = None
+    atmosphere_properties = None
+    if ocean_reqs is not None:
+        ocean, ocean_properties = config.ocean.build(
+            ocean_reqs.names, ocean_reqs.n_timesteps_schedule
+        )
+    if ice_reqs is not None:
+        ice, ice_properties = config.ice.build(
+            ice_reqs.names, ice_reqs.n_timesteps_schedule
+        )
+    if atmosphere_reqs is not None:
+        atmosphere, atmosphere_properties = config.atmosphere.build(
+            atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
+        )
+    properties = CoupledDatasetProperties(
+        ocean_properties,
+        ice_properties,
+        atmosphere_properties
     )
-    atmosphere, atmosphere_properties = config.atmosphere.build(
-        atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
-    )
-    properties = CoupledDatasetProperties(ocean_properties, atmosphere_properties)
     dataset = CoupledDataset(
         ocean=ocean,
+        ice=ice,
         atmosphere=atmosphere,
         properties=properties,
         n_steps_fast=requirements.n_steps_fast,
@@ -157,6 +179,12 @@ def get_gridded_data(
         )
     else:
         ocean_label_encoding = None
+    if config.ice_available_labels is not None:
+        ice_label_encoding = LabelEncoding(
+            sorted(list(config.ice_available_labels))
+        )
+    else:
+        ice_label_encoding = None
     if config.atmosphere_available_labels is not None:
         atmosphere_label_encoding = LabelEncoding(
             sorted(list(config.atmosphere_available_labels))

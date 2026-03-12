@@ -40,7 +40,7 @@ from fme.coupled.stepper import (
 @dataclasses.dataclass
 class StandaloneComponentConfig:
     """
-    Configuration specifying the path to one of the components (ocean or
+    Configuration specifying the path to one of the components (ocean, ice, or
     atmosphere) within a CoupledStepper. Intended for inference with separate
     pretrained Stepper training checkpoints.
 
@@ -58,34 +58,65 @@ class StandaloneComponentCheckpointsConfig:
 
     Parameters:
         ocean: The ocean component configuration.
+        ice: The ice component configuration.
         atmosphere: The atmosphere component configuration. The stepper
-            configuration must include 'ocean'.
+            configuration must include 'ocean' or 'ice'.
         sst_name: Name of the sea surface temperature field in the ocean data.
 
     """
 
-    ocean: StandaloneComponentConfig
-    atmosphere: StandaloneComponentConfig
+    ocean: StandaloneComponentConfig | None = None
+    ice: StandaloneComponentConfig | None = None
+    atmosphere: StandaloneComponentConfig | None = None
     sst_name: str = "sst"
+    bheat_name: str | None = None
+    ssh_name: str | None = None
+    tauuo_name: str | None = None
+    tauvo_name: str | None = None
     ocean_fraction_prediction: CoupledOceanFractionConfig | None = None
 
     def load_stepper_config(self) -> CoupledStepperConfig:
-        return CoupledStepperConfig(
-            ocean=ComponentConfig(
+        ocean_config = None
+        ice_config = None
+        atmos_config = None
+        if self.ocean is not None:
+            ocean_config=ComponentConfig(
                 timedelta=self.ocean.timedelta,
                 stepper=load_single_stepper_config(self.ocean.path),
-            ),
-            atmosphere=ComponentConfig(
+            )
+        if self.ice is not None:
+            ice_config=ComponentConfig(
+                timedelta=self.ice.timedelta,
+                stepper=load_single_stepper_config(self.ice.path),
+            )
+        if self.atmosphere is not None:
+            atmos_config=ComponentConfig(
                 timedelta=self.atmosphere.timedelta,
                 stepper=load_single_stepper_config(self.atmosphere.path),
-            ),
+            )
+        return CoupledStepperConfig(
+            ocean=ocean_config,
+            ice=ice_config,
+            atmosphere=atmos_config,
             sst_name=self.sst_name,
+            bheat_name=self.bheat_name,
+            ssh_name=self.ssh_name,
+            tauuo_name=self.tauuo_name,
+            tauvo_name=self.tauvo_name,
             ocean_fraction_prediction=self.ocean_fraction_prediction,
         )
 
     def load_stepper(self) -> CoupledStepper:
-        ocean = load_single_stepper(self.ocean.path)
-        atmosphere = load_single_stepper(self.atmosphere.path)
+        ocean = None
+        ice = None
+        atmos = None
+        if self.ocean is not None:
+            ocean = load_single_stepper(self.ocean.path)
+        if self.ice is not None:
+            ice = load_single_stepper(self.ice.path)
+        if self.atmosphere is not None:
+            atmos = load_single_stepper(self.atmosphere.path)
+
         dataset_info = CoupledDatasetInfo(
             ocean=ocean.training_dataset_info,
             atmosphere=atmosphere.training_dataset_info,
