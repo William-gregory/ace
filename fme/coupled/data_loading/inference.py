@@ -92,23 +92,66 @@ class InferenceDataset(torch.utils.data.Dataset):
         initial_time: xr.DataArray | None = None,
     ):
         ocean_reqs = requirements.ocean_requirements
+        ice_reqs = requirements.ice_requirements
         atmosphere_reqs = requirements.atmosphere_requirements
         ocean: ComponentDatasetType | DummyDataset
-        atmosphere: ComponentDatasetType
+        ice: ComponentDatasetType | DummyDataset
+        atmosphere: ComponentDatasetType | DummyDataset
 
-        if config.dataset.ocean is not None:
+        if config.dataset.atmosphere is None:
             ocean, ocean_properties = config.dataset.ocean.build(
                 ocean_reqs.names, ocean_reqs.n_timesteps_schedule
             )
-        else:
+            ice, ice_properties = config.dataset.ice.build(
+                ice_reqs.names, ice_reqs.n_timesteps_schedule
+            )
             assert dataset_info is not None
+            atmosphere, atmosphere_properties = _make_dummy_atmos_forcing(
+                dataset_info=dataset_info,
+                initial_time=initial_time,
+                total_coupled_steps=ice_reqs.n_timesteps_schedule,
+                atmosphere_reqs=atmosphere_reqs,
+            )
+        elif config.dataset.ice is None:
+            ocean, ocean_properties = config.dataset.ocean.build(
+                ocean_reqs.names, ocean_reqs.n_timesteps_schedule
+            )
+            atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
+                atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
+            )
+            assert dataset_info is not None
+            ice, ice_properties = _make_dummy_ice_forcing(
+                dataset_info=dataset_info,
+                initial_time=initial_time,
+                total_coupled_steps=atmosphere_reqs.n_timesteps_schedule,
+                ice_reqs=ice_reqs,
+            )
+        elif config.dataset.ocean is None:
+            ice, ice_properties = config.dataset.ice.build(
+                ice_reqs.names, ice_reqs.n_timesteps_schedule
+            )
+            atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
+                atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
+            )
             ocean, ocean_properties = _make_dummy_ocean_forcing(
                 dataset_info=dataset_info,
                 initial_time=initial_time,
                 total_coupled_steps=total_coupled_steps,
                 ocean_reqs=ocean_reqs,
             )
+        else:
+            ocean, ocean_properties = config.dataset.ocean.build(
+                ocean_reqs.names, ocean_reqs.n_timesteps_schedule
+            )
+            ice, ice_properties = config.dataset.ice.build(
+                ice_reqs.names, ice_reqs.n_timesteps_schedule
+            )
+            atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
+                atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
+            )
+
         ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
+        config.dataset.ice.update_subset(TimeSlice(start_time=ocean.first_time))
         config.dataset.atmosphere.update_subset(TimeSlice(start_time=ocean.first_time))
         atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
             atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
@@ -256,3 +299,55 @@ def _make_dummy_ocean_forcing(
         labels=None,
     )
     return ocean, ocean_property
+
+def _make_dummy_ice_forcing(
+    dataset_info: CoupledDatasetInfo,
+    initial_time: xr.DataArray,
+    total_coupled_steps: int,
+    ice_reqs: DataRequirements,
+) -> tuple[DummyDataset, DatasetProperties]:
+    ice_property = DatasetProperties(
+        variable_metadata=dict(dataset_info.ice.variable_metadata),
+        vertical_coordinate=dataset_info.ice.vertical_coordinate,
+        horizontal_coordinates=dataset_info.ice.horizontal_coordinates,
+        mask_provider=dataset_info.ice.mask_provider,
+        timestep=dataset_info.ice.timestep,
+        is_remote=False,
+        all_labels=set(),
+    )
+    ts = dataset_info.ice.timestep
+    ice = DummyDataset(
+        start_time=initial_time.squeeze().values.flat[0],
+        end_time=initial_time.squeeze().values.flat[-1] + ts * total_coupled_steps,
+        timestep=ts,
+        n_timesteps=ice_reqs.n_timesteps_schedule,
+        horizontal_coordinates=dataset_info.ice.horizontal_coordinates,
+        labels=None,
+    )
+    return ice, ice_property
+
+def _make_dummy_atmos_forcing(
+    dataset_info: CoupledDatasetInfo,
+    initial_time: xr.DataArray,
+    total_coupled_steps: int,
+    atmosphere_reqs: DataRequirements,
+) -> tuple[DummyDataset, DatasetProperties]:
+    atmos_property = DatasetProperties(
+        variable_metadata=dict(dataset_info.atmosphere.variable_metadata),
+        vertical_coordinate=dataset_info.atmosphere.vertical_coordinate,
+        horizontal_coordinates=dataset_info.atmosphere.horizontal_coordinates,
+        mask_provider=dataset_info.atmosphere.mask_provider,
+        timestep=dataset_info.atmosphere.timestep,
+        is_remote=False,
+        all_labels=set(),
+    )
+    ts = dataset_info.atmosphere.timestep
+    atmos = DummyDataset(
+        start_time=initial_time.squeeze().values.flat[0],
+        end_time=initial_time.squeeze().values.flat[-1] + ts * total_coupled_steps,
+        timestep=ts,
+        n_timesteps=atmosphere_reqs.n_timesteps_schedule,
+        horizontal_coordinates=dataset_info.atmosphere.horizontal_coordinates,
+        labels=None,
+    )
+    return atmos, atmos_property
