@@ -1071,6 +1071,7 @@ class Stepper:
     ) -> Generator[TensorDict, None, None]:
         state = {k: ic_dict[k].squeeze(self.TIME_DIM) for k in ic_dict}
         for step in range(n_forward_steps):
+
             input_forcing = {
                 k: (
                     forcing_dict[k][:, step]
