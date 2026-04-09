@@ -8,7 +8,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH --partition=cimes
-#SBATCH --time=01:00:00
+#SBATCH --time=06:00:00
 
 set -e
 source /scratch/cimes/wg4031/miniconda3/etc/profile.d/conda.sh

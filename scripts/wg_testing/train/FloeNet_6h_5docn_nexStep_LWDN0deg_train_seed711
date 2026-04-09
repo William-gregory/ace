@@ -19,7 +19,7 @@ conda activate fme
 # Set master node information
 export PYTHONPATH=/home/wg4031/ace/:$PYTHONPATH
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-export MASTER_PORT=28600
+export MASTER_PORT=28900
 
 export FME_TRAIN_DIR=/scratch/cimes/wg4031/fme/train
 export FME_VALID_DIR=/scratch/cimes/wg4031/fme/valid
