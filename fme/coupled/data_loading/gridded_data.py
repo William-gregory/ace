@@ -47,6 +47,7 @@ class GriddedData(GriddedDataABC[CoupledBatchData]):
         self._loader = loader
         self._properties = properties.to_device()
         self._ocean = self._properties.ocean
+        self._ice = self._properties.ice
         self._atmosphere = self._properties.atmosphere
         self._sampler = sampler
         self._batch_size: int | None = None
@@ -76,21 +77,38 @@ class GriddedData(GriddedDataABC[CoupledBatchData]):
 
     @property
     def dataset_info(self) -> CoupledDatasetInfo:
-        return CoupledDatasetInfo(
-            ocean=DatasetInfo(
+        ocean = None
+        ice = None
+        atmosphere = None
+        if self._ocean is not None:
+            ocean = DatasetInfo(
                 horizontal_coordinates=self._ocean.horizontal_coordinates,
                 vertical_coordinate=self._ocean.vertical_coordinate,
                 mask_provider=self._ocean.mask_provider,
                 timestep=self._ocean.timestep,
                 variable_metadata=self._properties.variable_metadata,
-            ),
-            atmosphere=DatasetInfo(
+            )
+        if self._atmosphere is not None:
+            atmosphere = DatasetInfo(
                 horizontal_coordinates=self._atmosphere.horizontal_coordinates,
                 vertical_coordinate=self._atmosphere.vertical_coordinate,
                 mask_provider=self._atmosphere.mask_provider,
                 timestep=self._atmosphere.timestep,
                 variable_metadata=self._properties.variable_metadata,
-            ),
+            )
+        if self._ice is not None:
+            ice = DatasetInfo(
+                horizontal_coordinates=self._ice.horizontal_coordinates,
+                vertical_coordinate=self._ice.vertical_coordinate,
+                mask_provider=self._ice.mask_provider,
+                timestep=self._ice.timestep,
+                variable_metadata=self._properties.variable_metadata,
+            )
+
+        return CoupledDatasetInfo(
+            ocean=ocean,
+            atmosphere=atmosphere,
+            ice=ice,
         )
 
     @property
@@ -107,12 +125,36 @@ class GriddedData(GriddedDataABC[CoupledBatchData]):
 
     @property
     def coords(self) -> CoupledCoords:
-        return CoupledCoords(
-            ocean_vertical=self._ocean.vertical_coordinate.coords,
-            atmosphere_vertical=self._atmosphere.vertical_coordinate.coords,
-            ocean_horizontal=dict(self._ocean.horizontal_coordinates.coords),
-            atmosphere_horizontal=dict(self._atmosphere.horizontal_coordinates.coords),
-        )
+        if self._atmosphere is None:
+            return CoupledCoords(
+                ocean_vertical=self._ocean.vertical_coordinate.coords,
+                ice_vertical=self._ice.vertical_coordinate.coords,
+                ocean_horizontal=dict(self._ocean.horizontal_coordinates.coords),
+                ice_horizontal=dict(self._ice.horizontal_coordinates.coords),
+            )
+        elif self._ice is None:
+            return CoupledCoords(
+                ocean_vertical=self._ocean.vertical_coordinate.coords,
+                atmosphere_vertical=self._atmosphere.vertical_coordinate.coords,
+                ocean_horizontal=dict(self._ocean.horizontal_coordinates.coords),
+                atmosphere_horizontal=dict(self._atmosphere.horizontal_coordinates.coords),
+            )
+        elif self._ocean is None:
+            return CoupledCoords(
+                ice_vertical=self._ice.vertical_coordinate.coords,
+                atmosphere_vertical=self._atmosphere.vertical_coordinate.coords,
+                ice_horizontal=dict(self._ice.horizontal_coordinates.coords),
+                atmosphere_horizontal=dict(self._atmosphere.horizontal_coordinates.coords),
+            )
+        else:
+            return CoupledCoords(
+                ocean_vertical=self._ocean.vertical_coordinate.coords,
+                ice_vertical=self._ice.vertical_coordinate.coords,
+                atmosphere_vertical=self._atmosphere.vertical_coordinate.coords,
+                ocean_horizontal=dict(self._ocean.horizontal_coordinates.coords),
+                ice_horizontal=dict(self._ice.horizontal_coordinates.coords),
+                atmosphere_horizontal=dict(self._atmosphere.horizontal_coordinates.coords),
+            )
 
     @property
     def n_samples(self) -> int:
@@ -180,6 +222,10 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
     @property
     def atmosphere_properties(self) -> DatasetProperties:
         return self._properties.atmosphere
+    
+    @property
+    def ice_properties(self) -> DatasetProperties:
+        return self._properties.ice
 
     @property
     def ocean_properties(self) -> DatasetProperties:
@@ -206,19 +252,31 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
 
     @property
     def dataset_info(self) -> CoupledDatasetInfo:
-        ocean = DatasetInfo(
-            horizontal_coordinates=self._properties.ocean.horizontal_coordinates,
-            vertical_coordinate=self._properties.ocean.vertical_coordinate,
-            mask_provider=self._properties.ocean.mask_provider,
-            timestep=self.ocean_timestep,
-        )
-        atmosphere = DatasetInfo(
-            horizontal_coordinates=self._properties.atmosphere.horizontal_coordinates,
-            vertical_coordinate=self._properties.atmosphere.vertical_coordinate,
-            mask_provider=self._properties.atmosphere.mask_provider,
-            timestep=self.atmosphere_timestep,
-        )
-        return CoupledDatasetInfo(ocean=ocean, atmosphere=atmosphere)
+        ocean = None
+        ice = None
+        atmosphere = None
+        if self._ocean is not None:
+            ocean = DatasetInfo(
+                horizontal_coordinates=self._properties.ocean.horizontal_coordinates,
+                vertical_coordinate=self._properties.ocean.vertical_coordinate,
+                mask_provider=self._properties.ocean.mask_provider,
+                timestep=self.ocean_timestep,
+            )
+        if self._atmosphere is not None:
+            atmosphere = DatasetInfo(
+                horizontal_coordinates=self._properties.atmosphere.horizontal_coordinates,
+                vertical_coordinate=self._properties.atmosphere.vertical_coordinate,
+                mask_provider=self._properties.atmosphere.mask_provider,
+                timestep=self.atmosphere_timestep,
+            )
+        if self._ice is not None:
+            ice = DatasetInfo(
+                horizontal_coordinates=self._properties.ice.horizontal_coordinates,
+                vertical_coordinate=self._properties.ice.vertical_coordinate,
+                mask_provider=self._properties.ice.mask_provider,
+                timestep=self.ice_timestep,
+            )
+        return CoupledDatasetInfo(ocean=ocean, atmosphere=atmosphere, ice=ice)
 
     @property
     def variable_metadata(self) -> dict[str, VariableMetadata]:
@@ -227,6 +285,10 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
     @property
     def ocean_timestep(self) -> datetime.timedelta:
         return self._properties.ocean_timestep
+    
+    @property
+    def ice_timestep(self) -> datetime.timedelta:
+        return self._properties.ice_timestep
 
     @property
     def atmosphere_timestep(self) -> datetime.timedelta:

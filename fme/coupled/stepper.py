@@ -280,23 +280,19 @@ class CoupledStepperConfig:
     atmosphere: ComponentConfig | None = None
     ice: ComponentConfig | None = None
     sst_name: str = "sst"
-    bheat_name: str | None = None
-    ssh_name: str | None = None
-    tauuo_name: str | None = None
-    tauvo_name: str | None = None
     ocean_fraction_prediction: CoupledOceanFractionConfig | None = None
 
     def __post_init__(self):
         self._validate_component_configs()
         
         if self.atmosphere is None:  # ice-ocean, with prescribed atmos
-            ice_ocean_config = self.ice.stepper.get_ocean()
-            if ice_ocean_config is None:
-                raise RuntimeError(
-                    "ice ocean config is None after validation; "
-                    "this should not happen"
-                )
-            self._ice_ocean_config = ice_ocean_config
+            #ice_ocean_config = self.ice.stepper.get_ocean()
+            #if ice_ocean_config is None:
+            #    raise RuntimeError(
+            #        "ice ocean config is None after validation; "
+            #        "this should not happen"
+            #    )
+            #self._ice_ocean_config = ice_ocean_config
 
             # set timesteps
             self._ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
@@ -323,12 +319,10 @@ class CoupledStepperConfig:
                     self.ice.stepper.output_names
                 )
             )
-            extra_forcings_names = [self.bheat_name, self.ssh_name,
-                                    self.tauuo_name, self.tauvo_name]
+        
             self._ocean_to_ice_forcing_names = list(
                 set(self.ice.stepper.input_only_names)
                 .intersection(self.ocean.stepper.output_names)
-                .union(extra_forcings_names)
             )
 
             # calculate names for each component's data requirements
@@ -604,13 +598,10 @@ class CoupledStepperConfig:
                 .intersection(self.ocean.stepper.output_names)
                 .union([self.sst_name])
             )
-            extra_forcings_names = [self.bheat_name, self.ssh_name,
-                                    self.tauuo_name, self.tauvo_name]
+
             self._ocean_to_ice_forcing_names = list(
                 set(self.ice.stepper.input_only_names).intersection(
-                    set(self.ocean.stepper.output_names).union(
-                        extra_forcings_names
-                    )
+                    set(self.ocean.stepper.output_names)
                 )
             )
             # calculate names for each component's data requirements
@@ -704,13 +695,13 @@ class CoupledStepperConfig:
         else:
             raise AttributeError("Atmosphere-ice coupling not configured")
     
-    @property
-    def ice_ocean_config(self) -> IceConfig:
-        """The OceanConfig defined in the ice StepperConfig."""
-        if hasattr(self, '_ice_ocean_config'):
-            return self._ice_ocean_config
-        else:
-            raise AttributeError("Ice-ocean coupling not configured")
+    #@property
+    #def ice_ocean_config(self) -> IceConfig:
+    #    """The OceanConfig defined in the ice StepperConfig."""
+    #    if hasattr(self, '_ice_ocean_config'):
+    #        return self._ice_ocean_config
+    #    else:
+    #        raise AttributeError("Ice-ocean coupling not configured")
 
     @property
     def ocean_fraction_name(self) -> str:
@@ -841,12 +832,12 @@ class CoupledStepperConfig:
             raise ValueError("At least two components must be configured for coupling.")
         
         if self.atmosphere is None: #ice-ocean coupling
-            ice_ocean_config = self.ice.stepper.get_ocean()
-            if ice_ocean_config is None:
-                raise ValueError(
-                    "The ice stepper 'ocean' config is missing but must be set for "
-                    "ice-ocean coupled emulation."
-                )
+            #ice_ocean_config = self.ice.stepper.get_ocean()
+            #if ice_ocean_config is None:
+            #    raise ValueError(
+            #        "The ice stepper 'ocean' config is missing but must be set for "
+            #        "ice-ocean coupled emulation."
+            #    )
             ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
             ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
             if ice_timestep > ocean_timestep:
@@ -895,28 +886,6 @@ class CoupledStepperConfig:
                     "The following variables which are ice component outputs "
                     "and ocean component inputs were not found among the ocean's "
                     f"next_step_forcing_names: {missing_next_step_forcings}."
-                )
-
-            # bheat_name must be present in the ocean's output names
-            if self.bheat_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.bheat_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.ssh_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.ssh_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.tauuo_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.tauuo_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.tauvo_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.tauvo_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
                 )
             
         elif self.ice is None: #atmosphere-ocean coupling
@@ -1179,26 +1148,6 @@ class CoupledStepperConfig:
                     f"The variable {self.sst_name} is not in the ocean's output "
                     "names but is required for coupling with the atmosphere."
                 )
-            if self.bheat_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.bheat_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.ssh_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.ssh_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.tauuo_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.tauuo_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
-            if self.tauvo_name not in self.ocean.stepper.output_names:
-                raise ValueError(
-                    f"The variable {self.tauvo_name} is not in the ocean's output "
-                    "names but is required for coupling with the ice."
-                )
             
             # validate ocean_fraction_prediction
             if self.ocean_fraction_prediction is not None:
@@ -1249,7 +1198,7 @@ class CoupledStepperConfig:
         
         if self.ice is not None:
             if self.ocean is not None:
-                n_coupled_steps * self.n_inner_steps
+                n_ice_steps = n_coupled_steps * self.n_inner_steps
             else:
                 n_ice_steps = n_coupled_steps
             ice_requirements = self._get_ice_data_requirements(n_ice_steps)
@@ -2993,9 +2942,9 @@ class CoupledTrainStepperConfig:
         atmosphere: The configuration for the atmosphere component.
     """
 
-    ocean: ComponentTrainingConfig
-    ice: ComponentTrainingConfig
-    atmosphere: ComponentTrainingConfig
+    ocean: ComponentTrainingConfig | None = None
+    ice: ComponentTrainingConfig | None = None
+    atmosphere: ComponentTrainingConfig| None = None
     parameter_init: CoupledParameterInitConfig = dataclasses.field(
         default_factory=lambda: CoupledParameterInitConfig()
     )
@@ -3019,18 +2968,24 @@ class CoupledTrainStepperConfig:
                 )
 
     def _build_loss(self, stepper: "CoupledStepper") -> "CoupledStepperTrainLoss":
-        ocean_step_loss = stepper.ocean.build_loss(self.ocean.loss)
-        ice_step_loss = stepper.ice.build_loss(self.ice.loss)
-        atmos_step_loss = stepper.atmosphere.build_loss(self.atmosphere.loss)
-        ocean_loss = self.ocean.loss_contributions.build(
-            ocean_step_loss, stepper.ocean.TIME_DIM
-        )
-        ice_loss = self.ice.loss_contributions.build(
-            ice_step_loss, stepper.ocean.TIME_DIM
-        )
-        atmos_loss = self.atmosphere.loss_contributions.build(
-            atmos_step_loss, stepper.atmosphere.TIME_DIM
-        )
+        ocean_loss = None
+        if stepper.ocean is not None:
+            ocean_step_loss = stepper.ocean.build_loss(self.ocean.loss)
+            ocean_loss = self.ocean.loss_contributions.build(
+                ocean_step_loss, stepper.ocean.TIME_DIM
+            )
+        ice_loss = None
+        if stepper.ice is not None:
+            ice_step_loss = stepper.ice.build_loss(self.ice.loss)
+            ice_loss = self.ice.loss_contributions.build(
+                ice_step_loss, stepper.ice.TIME_DIM
+            )
+        atmos_loss = None
+        if stepper.atmosphere is not None:
+            atmos_step_loss = stepper.atmosphere.build_loss(self.atmosphere.loss)
+            atmos_loss = self.atmosphere.loss_contributions.build(
+                atmos_step_loss, stepper.atmosphere.TIME_DIM
+            )
         return CoupledStepperTrainLoss(ocean_loss, ice_loss, atmos_loss)
 
     def get_train_stepper(
@@ -3050,15 +3005,44 @@ class CoupledTrainStepperConfig:
             training functionality.
         """
         loaders = self.parameter_init.build_weights_and_history_loaders()
-        ocean_initializer = self.ocean.parameter_init.build(
-            load_weights_and_history=loaders.ocean,
-        )
-        atmosphere_initializer = self.atmosphere.parameter_init.build(
-            load_weights_and_history=loaders.atmosphere,
-        )
+        ocean_initializer = None
+        ice_initializer = None
+        atmosphere_initializer = None
+        if self.atmosphere is None:
+            ocean_initializer = self.ocean.parameter_init.build(
+                load_weights_and_history=loaders.ocean,
+            )
+            ice_initializer = self.ice.parameter_init.build(
+                load_weights_and_history=loaders.ice,
+            )
+        elif self.ice is None:
+            ocean_initializer = self.ocean.parameter_init.build(
+                load_weights_and_history=loaders.ocean,
+            )
+            atmosphere_initializer = self.atmosphere.parameter_init.build(
+                load_weights_and_history=loaders.atmosphere,
+            )
+        elif self.ocean is None:
+            ice_initializer = self.ice.parameter_init.build(
+                load_weights_and_history=loaders.ice,
+            )
+            atmosphere_initializer = self.atmosphere.parameter_init.build(
+                load_weights_and_history=loaders.atmosphere,
+            )
+        else:
+            ocean_initializer = self.ocean.parameter_init.build(
+                load_weights_and_history=loaders.ocean,
+            )
+            ice_initializer = self.ice.parameter_init.build(
+                load_weights_and_history=loaders.ice,
+            )
+            atmosphere_initializer = self.atmosphere.parameter_init.build(
+                load_weights_and_history=loaders.atmosphere,
+            )
         stepper = stepper_config.get_stepper(
             dataset_info=dataset_info,
             ocean_parameter_initializer=ocean_initializer,
+            ice_parameter_initializer=ice_initializer,
             atmosphere_parameter_initializer=atmosphere_initializer,
         )
         loss = self._build_loss(stepper)

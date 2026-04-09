@@ -102,8 +102,17 @@ class CoupledDatasetInfo:
         """
         Update the variable metadata for ocean, ice, and atmosphere datasets.
         """
+        ocean_metadata = None
+        if self.ocean is not None:
+            ocean_metadata = self.ocean.update_variable_metadata(variable_metadata),
+        ice_metadata = None
+        if self.ice is not None:
+            ice_metadata = self.ice.update_variable_metadata(variable_metadata),
+        atmos_metadata = None
+        if self.atmosphere is not None:
+            atmos_metadata = self.atmosphere.update_variable_metadata(variable_metadata),
         return CoupledDatasetInfo(
-            ocean=self.ocean.update_variable_metadata(variable_metadata),
-            ice=self.ice.update_variable_metadata(variable_metadata),
-            atmosphere=self.atmosphere.update_variable_metadata(variable_metadata),
+            ocean=ocean_metadata,
+            ice=ice_metadata,
+            atmosphere=atmos_metadata,
         )

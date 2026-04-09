@@ -436,30 +436,84 @@ class CoupledDataset:
         return CoupledDatasetItem(ocean=ocean, ice=ice, atmosphere=atmosphere)
 
     def validate_inference_length(self, max_start_index: int, max_window_len: int):
-        try:
-            self._ocean.validate_inference_length(max_start_index, max_window_len)
-        except ValueError as e:
-            raise ValueError(
-                "The ocean dataset has an insufficient number of timepoints."
-            ) from e
-        atmos_max_start_index = max_start_index * self.n_steps_fast
-        atmos_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
-        try:
-            self._atmosphere.validate_inference_length(
-                atmos_max_start_index, atmos_max_window_len
-            )
-        except ValueError as e:
-            raise ValueError(
-                "The atmosphere dataset has an insufficient number of timepoints."
-            ) from e
-        try:
-            self._ice.validate_inference_length(
-                atmos_max_start_index, atmos_max_window_len
-            )
-        except ValueError as e:
-            raise ValueError(
-                "The ice dataset has an insufficient number of timepoints."
-            ) from e
+        if self._atmosphere is None:
+            try:
+                self._ocean.validate_inference_length(max_start_index, max_window_len)
+            except ValueError as e:
+                raise ValueError(
+                    "The ocean dataset has an insufficient number of timepoints."
+                ) from e
+            ice_max_start_index = max_start_index * self.n_steps_fast
+            ice_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
+            try:
+                self._ice.validate_inference_length(
+                    ice_max_start_index, ice_max_window_len
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "The ice dataset has an insufficient number of timepoints."
+                ) from e
+        elif self._ice is None:
+            try:
+                self._ocean.validate_inference_length(max_start_index, max_window_len)
+            except ValueError as e:
+                raise ValueError(
+                    "The ocean dataset has an insufficient number of timepoints."
+                ) from e
+            atmos_max_start_index = max_start_index * self.n_steps_fast
+            atmos_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
+            try:
+                self._atmosphere.validate_inference_length(
+                    atmos_max_start_index, atmos_max_window_len
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "The atmosphere dataset has an insufficient number of timepoints."
+                ) from e
+        elif self._ocean is None:
+            try:
+                self._ice.validate_inference_length(max_start_index, max_window_len)
+            except ValueError as e:
+                raise ValueError(
+                    "The ice dataset has an insufficient number of timepoints."
+                ) from e
+            atmos_max_start_index = max_start_index * self.n_steps_fast
+            atmos_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
+            try:
+                self._atmosphere.validate_inference_length(
+                    atmos_max_start_index, atmos_max_window_len
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "The atmosphere dataset has an insufficient number of timepoints."
+                ) from e
+        else:
+            try:
+                self._ocean.validate_inference_length(max_start_index, max_window_len)
+            except ValueError as e:
+                raise ValueError(
+                    "The ocean dataset has an insufficient number of timepoints."
+                ) from e
+            ice_max_start_index = max_start_index * self.n_steps_fast
+            ice_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
+            try:
+                self._ice.validate_inference_length(
+                    ice_max_start_index, ice_max_window_len
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "The ice dataset has an insufficient number of timepoints."
+                ) from e
+            atmos_max_start_index = max_start_index * self.n_steps_fast
+            atmos_max_window_len = (max_window_len - 1) * self.n_steps_fast + 1
+            try:
+                self._atmosphere.validate_inference_length(
+                    atmos_max_start_index, atmos_max_window_len
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "The atmosphere dataset has an insufficient number of timepoints."
+                ) from e
 
     def set_epoch(self, epoch: int):
         if self._ocean is not None:

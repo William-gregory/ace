@@ -46,6 +46,9 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
     n_timesteps_ocean = None
     n_timesteps_ice = None
     n_timesteps_atmosphere = None
+    ocean_normalize = None
+    ice_normalize = None
+    atmosphere_normalize = None
     if stepper.atmosphere is None:
         initial_inference_times = batch.ocean_data.time.isel(time=0)
         n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
@@ -53,6 +56,8 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
             config.inference_n_coupled_steps * stepper.n_inner_steps
             + stepper.ice.n_ic_timesteps
         )
+        ocean_normalize = stepper.ocean.normalizer.normalize
+        ice_normalize = stepper.ice.normalizer.normalize
     elif stepper.ice is None:
         initial_inference_times = batch.ocean_data.time.isel(time=0)
         n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
@@ -60,10 +65,14 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
             config.inference_n_coupled_steps * stepper.n_inner_steps
             + stepper.atmosphere.n_ic_timesteps
         )
+        ocean_normalize = stepper.ocean.normalizer.normalize
+        atmosphere_normalize = stepper.atmosphere.normalizer.normalize
     elif stepper.ocean is None:
         initial_inference_times = batch.ice_data.time.isel(time=0)
         n_timesteps_ice = config.inference_n_coupled_steps
         n_timesteps_atmosphere = config.inference_n_coupled_steps
+        ice_normalize = stepper.ice.normalizer.normalize
+        atmosphere_normalize = stepper.atmosphere.normalizer.normalize
     else:
         initial_inference_times = batch.ocean_data.time.isel(time=0)
         n_timesteps_ocean = config.inference_n_coupled_steps + stepper.ocean.n_ic_timesteps
@@ -75,6 +84,9 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
             config.inference_n_coupled_steps * stepper.n_inner_steps
             + stepper.atmosphere.n_ic_timesteps
         )
+        ocean_normalize = stepper.ocean.normalizer.normalize
+        ice_normalize = stepper.ice.normalizer.normalize
+        atmosphere_normalize = stepper.atmosphere.normalizer.normalize
     aggregator_builder = CoupledAggregatorBuilder(
         inference_config=config.inference_aggregator,
         dataset_info=dataset_info.update_variable_metadata(variable_metadata),
@@ -82,9 +94,9 @@ def build_trainer(builder: TrainBuilders, config: TrainConfig) -> Trainer:
         n_timesteps_ocean=n_timesteps_ocean,
         n_timesteps_atmosphere=n_timesteps_atmosphere,
         n_timesteps_ice=n_timesteps_ice,
-        ocean_normalize=stepper.ocean.normalizer.normalize,
-        ice_normalize=stepper.ice.normalizer.normalize,
-        atmosphere_normalize=stepper.atmosphere.normalizer.normalize,
+        ocean_normalize=ocean_normalize,
+        ice_normalize=ice_normalize,
+        atmosphere_normalize=atmosphere_normalize,
         loss_scaling=stepper.effective_loss_scaling,
         save_per_epoch_diagnostics=config.save_per_epoch_diagnostics,
         output_dir=config.output_dir,

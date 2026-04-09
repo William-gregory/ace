@@ -41,6 +41,17 @@ from fme.coupled.requirements import (
 from .inference import ExplicitIndices
 
 
+_WORKER_DIST_CX = None  # needed so it doesn't get garbage collected and finalized
+
+
+def _forkserver_worker_init_fn(worker_id: int) -> None:
+    global _WORKER_DIST_CX
+    _WORKER_DIST_CX = Distributed.context()
+    _WORKER_DIST_CX.__enter__()
+    # don't need to exit the context on workers as they are not
+    # initialized/managed by torchrun
+
+
 class CollateFn:
     def __init__(
         self,
@@ -95,9 +106,9 @@ def get_dataset(
             atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
         )
     properties = CoupledDatasetProperties(
-        ocean_properties,
-        ice_properties,
-        atmosphere_properties
+        ocean=ocean_properties,
+        ice=ice_properties,
+        atmosphere=atmosphere_properties,
     )
     dataset = CoupledDataset(
         ocean=ocean,
@@ -161,9 +172,12 @@ def get_gridded_data(
         # GCSFS and S3FS are not fork-safe, so we need to use forkserver
         mp_context = "forkserver"
         persistent_workers = True
+        worker_init_fn = _forkserver_worker_init_fn
     else:
         mp_context = None
         persistent_workers = False
+        # Always use worker_init_fn when we have workers to ensure distributed context
+        worker_init_fn = _forkserver_worker_init_fn if config.num_data_workers > 0 else None
 
     batch_size = dist.local_batch_size(int(config.batch_size))
 
@@ -173,34 +187,42 @@ def get_gridded_data(
     else:
         kwargs = {"prefetch_factor": config.prefetch_factor}
 
+    ocean_label_encoding = None
+    ocean_horiz_dim = None
     if config.ocean_available_labels is not None:
         ocean_label_encoding = LabelEncoding(
             sorted(list(config.ocean_available_labels))
         )
-    else:
-        ocean_label_encoding = None
+    if properties.ocean is not None:
+        ocean_horiz_dim = list(properties.ocean.horizontal_coordinates.dims)
+
+    ice_label_encoding = None
+    ice_horiz_dim = None
     if config.ice_available_labels is not None:
         ice_label_encoding = LabelEncoding(
             sorted(list(config.ice_available_labels))
         )
-    else:
-        ice_label_encoding = None
+    if properties.ice is not None:
+        ice_horiz_dim = list(properties.ice.horizontal_coordinates.dims)
+
+    atmosphere_label_encoding = None
+    atmosphere_horiz_dim = None
     if config.atmosphere_available_labels is not None:
         atmosphere_label_encoding = LabelEncoding(
             sorted(list(config.atmosphere_available_labels))
         )
-    else:
-        atmosphere_label_encoding = None
+    if properties.atmosphere is not None:
+        atmosphere_horiz_dim = list(properties.atmosphere.horizontal_coordinates.dims)
 
     dataloader = CoupledDataLoader(
         dataset,
         CollateFn(
-            ocean_horizontal_dims=list(properties.ocean.horizontal_coordinates.dims),
+            ocean_horizontal_dims=ocean_horiz_dim,
             ocean_label_encoding=ocean_label_encoding,
+            ice_label_encoding=ice_label_encoding,
+            ice_horizontal_dims=ice_horiz_dim,
             atmosphere_label_encoding=atmosphere_label_encoding,
-            atmosphere_horizontal_dims=list(
-                properties.atmosphere.horizontal_coordinates.dims
-            ),
+            atmosphere_horizontal_dims=atmosphere_horiz_dim,
         ),
         batch_size=batch_size,
         num_workers=config.num_data_workers,
@@ -209,6 +231,7 @@ def get_gridded_data(
         pin_memory=using_gpu(),
         multiprocessing_context=mp_context,
         persistent_workers=persistent_workers,
+        worker_init_fn=worker_init_fn,
         **kwargs,
     )
 
@@ -251,9 +274,12 @@ def get_inference_data(
         # persist workers since startup is slow
         mp_context = "forkserver"
         persistent_workers = True
+        worker_init_fn = _forkserver_worker_init_fn
     else:
         mp_context = None
         persistent_workers = False
+        # Always use worker_init_fn when we have workers to ensure distributed context
+        worker_init_fn = _forkserver_worker_init_fn if config.num_data_workers > 0 else None
 
     logging.info(f"Multiprocessing inference context: {mp_context or 'fork'}")
 
@@ -266,6 +292,7 @@ def get_inference_data(
         pin_memory=using_gpu(),
         multiprocessing_context=mp_context,
         persistent_workers=persistent_workers,
+        worker_init_fn=worker_init_fn,
     )
     inference_data = InferenceGriddedData(
         loader=loader,

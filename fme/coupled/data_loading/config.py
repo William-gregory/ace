@@ -106,6 +106,8 @@ class CoupledDataLoaderConfig:
         """
         Return the labels that are available in the atmosphere dataset.
         """
+        if self.dataset.atmosphere is None:
+            return None
         return accumulate_labels(
             [ds.atmosphere.available_labels for ds in self.dataset.coupled_configs]
         )
@@ -115,6 +117,8 @@ class CoupledDataLoaderConfig:
         """
         Return the labels that are available in the ice dataset.
         """
+        if self.dataset.ice is None:
+            return None
         return accumulate_labels(
             [ds.ice.available_labels for ds in self.dataset.coupled_configs]
         )
@@ -124,6 +128,8 @@ class CoupledDataLoaderConfig:
         """
         Return the labels that are available in the ocean dataset.
         """
+        if self.dataset.ocean is None:
+            return None
         return accumulate_labels(
             [ds.ocean.available_labels for ds in self.dataset.coupled_configs]
         )
