@@ -3,6 +3,9 @@ import datetime
 import os
 from collections.abc import Mapping
 
+import cftime
+import numpy.typing as npt
+
 from fme.ace.inference.data_writer.dataset_metadata import DatasetMetadata
 from fme.ace.inference.data_writer.main import DataWriterConfig, PairedDataWriter
 from fme.core.cloud import makedirs
@@ -43,7 +46,7 @@ class CoupledDataWriterConfig:
     def build_paired(
         self,
         experiment_dir: str,
-        n_initial_conditions: int,
+        initial_condition_times: npt.NDArray[cftime.datetime],
         variable_metadata: Mapping[str, VariableMetadata],
         coords: CoupledCoords,
         dataset_metadata: dict[str, DatasetMetadata],
@@ -62,7 +65,7 @@ class CoupledDataWriterConfig:
             makedirs(ocean_dir, exist_ok=True)
             ocean_writer=self.ocean.build_paired(
                 experiment_dir=ocean_dir,
-                n_initial_conditions=n_initial_conditions,
+                initial_condition_times=initial_condition_times,
                 n_timesteps=n_timesteps_ocean,
                 timestep=ocean_timestep,
                 variable_metadata=variable_metadata,
@@ -86,7 +89,7 @@ class CoupledDataWriterConfig:
             makedirs(atmos_dir, exist_ok=True)
             atmosphere_writer=self.atmosphere.build_paired(
                 experiment_dir=atmos_dir,
-                n_initial_conditions=n_initial_conditions,
+                initial_condition_times=initial_condition_times,
                 n_timesteps=n_timesteps_atmosphere,
                 timestep=atmosphere_timestep,
                 variable_metadata=variable_metadata,

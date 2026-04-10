@@ -38,27 +38,27 @@ class CoupledDatasetInfo:
         atmos_check = self.atmosphere == other.atmosphere
         return ocean_check and ice_check and atmos_check
 
-    def to_state(self) -> dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]:
+    def get_state(self) -> dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]:
         if self.atmosphere is None:
             ds = {
-                "ocean": self.ocean.to_state(),
-                "ice": self.ice.to_state(),
+                "ocean": self.ocean.get_state(),
+                "ice": self.ice.get_state(),
             }
         elif self.ice is None:
             ds = {
-                "ocean": self.ocean.to_state(),
-                "atmosphere": self.atmosphere.to_state(),
+                "ocean": self.ocean.get_state(),
+                "atmosphere": self.atmosphere.get_state(),
              }
         elif self.ocean is None:
             ds = {
-                "ice": self.ice.to_state(),
-                "atmosphere": self.atmosphere.to_state(),
+                "ice": self.ice.get_state(),
+                "atmosphere": self.atmosphere.get_state(),
             }
         else:
             ds = {
-                "ocean": self.ocean.to_state(),
-                "ice": self.ice.to_state(),
-                "atmosphere": self.atmosphere.to_state(),
+                "ocean": self.ocean.get_state(),
+                "ice": self.ice.get_state(),
+                "atmosphere": self.atmosphere.get_state(),
             }
         return ds
 

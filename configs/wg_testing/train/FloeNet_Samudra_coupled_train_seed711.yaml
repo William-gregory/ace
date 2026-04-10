@@ -129,7 +129,6 @@ stepper_training:
         TMELT: 1
         SWUP: 1
 stepper:
-  sst_name: tos
   ocean:
     timedelta: 5D
     stepper:

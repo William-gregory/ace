@@ -39,28 +39,32 @@ def run_coupled_dataset_comparison(
     deriver: CoupledDeriver,
     writer: CoupledPairedDataWriter | NullDataWriter | None = None,
     record_logs: Callable[[InferenceLogs], None] | None = None,
-    restrict_to_all_names: CoupledNames | None = None,
+    all_names: CoupledNames | None = None,
 ) -> None:
     if record_logs is None:
-        record_logs = get_record_to_wandb(label="inference")
+        record_logs = get_record_to_wandb(label="inference").log
     if writer is None:
         writer = NullDataWriter()
 
-    def _restrict_to_all_names(batch: CoupledBatchData) -> CoupledBatchData:
-        if restrict_to_all_names is None:
+    if all_names is not None:
+        overlapping_names = set(all_names.ocean) & set(all_names.atmosphere)
+    else:
+        overlapping_names = set()
+
+    def _remove_overlapping_names(batch: CoupledBatchData) -> CoupledBatchData:
+        if not overlapping_names:
             return batch
         else:
             ocean_batch = None
             ice_batch = None
             atmos_batch = None
             if batch.ocean_data is not None:
-                ocean_batch = batch.ocean_data.subset_names(restrict_to_all_names.ocean)
+                ocean_keep = [n for n in batch.ocean_data.data if n not in overlapping_names]
+                ocean_batch = batch.ocean_data.subset_names(ocean_keep)
             if batch.ice_data is not None:
-                ice_batch = batch.ice_data.subset_names(restrict_to_all_names.ice)
+                ice_batch = batch.ice_data
             if batch.atmosphere_data is not None:
-                atmos_batch = batch.atmosphere_data.subset_names(
-                    restrict_to_all_names.atmosphere
-                )
+                atmos_batch = batch.atmosphere_data
             return CoupledBatchData(
                 ocean_data=ocean_batch,
                 ice_data=ice_batch,
@@ -72,13 +76,13 @@ def run_coupled_dataset_comparison(
     i_time = 0
     n_windows = min(len(prediction_data.loader), len(target_data.loader))
     for i, (pred, target) in enumerate(zip(prediction_data.loader, target_data.loader)):
-        timer.stop()
+        timer.stop("data_loading")
         if i_time == 0:
             with timer.context("aggregator"):
                 pred_ic = prediction_data.initial_condition.as_batch_data()
                 target_ic = target_data.initial_condition.as_batch_data()
-                pred_ic = _restrict_to_all_names(pred_ic)
-                target_ic = _restrict_to_all_names(target_ic)
+                pred_ic = _remove_overlapping_names(pred_ic)
+                target_ic = _remove_overlapping_names(target_ic)
                 logs = aggregator.record_initial_condition(
                     initial_condition=CoupledPairedData.from_coupled_batch_data(
                         prediction=pred_ic,
@@ -98,8 +102,8 @@ def run_coupled_dataset_comparison(
         )
         pred = deriver.get_forward_data(pred, compute_derived_variables=True)
         target = deriver.get_forward_data(target, compute_derived_variables=True)
-        pred = _restrict_to_all_names(pred)
-        target = _restrict_to_all_names(target)
+        pred = _remove_overlapping_names(pred)
+        target = _remove_overlapping_names(target)
         paired_data = CoupledPairedData.from_coupled_batch_data(
             prediction=pred,
             reference=target,
@@ -116,4 +120,4 @@ def run_coupled_dataset_comparison(
         timer.start("data_loading")
         i_time += forward_steps_in_memory
 
-    timer.stop()
+    timer.stop("data_loading")

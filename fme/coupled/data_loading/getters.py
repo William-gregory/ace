@@ -40,14 +40,13 @@ from fme.coupled.requirements import (
 
 from .inference import ExplicitIndices
 
+_COUPLED_WORKER_DIST_CX = None
 
-_WORKER_DIST_CX = None  # needed so it doesn't get garbage collected and finalized
 
-
-def _forkserver_worker_init_fn(worker_id: int) -> None:
-    global _WORKER_DIST_CX
-    _WORKER_DIST_CX = Distributed.context()
-    _WORKER_DIST_CX.__enter__()
+def _coupled_forkserver_worker_init_fn(worker_id: int) -> None:
+    global _COUPLED_WORKER_DIST_CX
+    _COUPLED_WORKER_DIST_CX = Distributed.context()
+    _COUPLED_WORKER_DIST_CX.__enter__()
     # don't need to exit the context on workers as they are not
     # initialized/managed by torchrun
 
@@ -172,12 +171,9 @@ def get_gridded_data(
         # GCSFS and S3FS are not fork-safe, so we need to use forkserver
         mp_context = "forkserver"
         persistent_workers = True
-        worker_init_fn = _forkserver_worker_init_fn
     else:
         mp_context = None
         persistent_workers = False
-        # Always use worker_init_fn when we have workers to ensure distributed context
-        worker_init_fn = _forkserver_worker_init_fn if config.num_data_workers > 0 else None
 
     batch_size = dist.local_batch_size(int(config.batch_size))
 
@@ -231,7 +227,6 @@ def get_gridded_data(
         pin_memory=using_gpu(),
         multiprocessing_context=mp_context,
         persistent_workers=persistent_workers,
-        worker_init_fn=worker_init_fn,
         **kwargs,
     )
 
@@ -254,6 +249,7 @@ def get_inference_data(
     window_requirements: CoupledDataRequirements,
     initial_condition: CoupledPrognosticState | CoupledPrognosticStateDataRequirements,
     dataset_info: CoupledDatasetInfo | None = None,
+    _force_forkserver: bool = False,
 ) -> InferenceGriddedData:
     initial_time = None
     if isinstance(initial_condition, CoupledPrognosticState):
@@ -269,17 +265,16 @@ def get_inference_data(
     )
     properties = dataset.properties
 
-    if config.zarr_engine_used:
+    if config.zarr_engine_used or _force_forkserver:
         # GCSFS and S3FS are not fork-safe, so we need to use forkserver
         # persist workers since startup is slow
         mp_context = "forkserver"
         persistent_workers = True
-        worker_init_fn = _forkserver_worker_init_fn
+        worker_init_fn = _coupled_forkserver_worker_init_fn
     else:
         mp_context = None
         persistent_workers = False
-        # Always use worker_init_fn when we have workers to ensure distributed context
-        worker_init_fn = _forkserver_worker_init_fn if config.num_data_workers > 0 else None
+        worker_init_fn = None
 
     logging.info(f"Multiprocessing inference context: {mp_context or 'fork'}")
 

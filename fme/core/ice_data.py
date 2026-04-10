@@ -14,7 +14,7 @@ ICE_FIELD_NAME_PREFIXES = MappingProxyType(
         "ice_mass_melt": ["LSNKi"],
         "snow_mass_growth": ["LSRCs"],
         "snow_mass_melt": ["LSNKs"],
-        "surface_skin_temperature": ["TS"],
+        "ice_surface_temperature": ["TS"],
         "ice_to_ocean_salt_flux": ["SALTF"],
         "ice_to_ocean_mass_flux": ["ice_to_ocean_mass_flux"],
         "ice_to_ocean_energy_flux": ["BMELT"],
@@ -134,9 +134,9 @@ class IceData:
         return self._get("ice_mass_melt")
 
     @property
-    def ice_surface_skin_temperature(self) -> torch.Tensor:
+    def ice_surface_temperature(self) -> torch.Tensor:
         """Returns ice or snow surface skin temperature."""
-        return self._get("surface_skin_temperature")
+        return self._get("ice_surface_temperature")
 
     @property
     def ice_to_ocean_salt_flux(self) -> torch.Tensor:
@@ -153,12 +153,12 @@ class IceData:
 
     @property
     def ice_to_ocean_energy_flux(self) -> torch.Tensor:
-        """Returns ice to ocean energy flux."""
+        """Returns ice to ocean melt/growth energy flux."""
         return self._get("ice_to_ocean_energy_flux")
 
     @property
     def ice_to_atmosphere_energy_flux(self) -> torch.Tensor:
-        """Returns ice to atmosphere energy flux."""
+        """Returns ice to atmosphere melting energy flux."""
         return self._get("ice_to_atmosphere_energy_flux")
     
     @property

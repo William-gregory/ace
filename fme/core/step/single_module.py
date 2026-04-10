@@ -232,11 +232,7 @@ class SingleModuleStepConfig(StepConfigABC):
         init_weights: Callable[[list[nn.Module]], None],
     ) -> "SingleModuleStep":
         logging.info("Initializing stepper from provided config")
-        corrector = dataset_info.vertical_coordinate.build_corrector(
-            config=self.corrector,
-            gridded_operations=dataset_info.gridded_operations,
-            timestep=dataset_info.timestep,
-        )
+        corrector = self.corrector.get_corrector(dataset_info)
         normalizer = self.normalization.get_network_normalizer(self._normalize_names)
         return SingleModuleStep(
             config=self,
@@ -336,6 +332,12 @@ class SingleModuleStep(StepABC):
     def surface_temperature_name(self) -> str | None:
         if self._config.ocean is not None:
             return self._config.ocean.surface_temperature_name
+        return None
+    
+    @property
+    def ice_surface_temperature_name(self) -> str | None:
+        if self._config.ice is not None:
+            return self._config.ice.ice_surface_temperature_name
         return None
 
     @property
