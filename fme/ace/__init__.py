@@ -70,7 +70,6 @@ from fme.core.cli import ResumeResultsConfig
 from fme.core.corrector.atmosphere import AtmosphereCorrectorConfig
 from fme.core.corrector.ice import IceCorrectorConfig
 from fme.core.corrector.ocean import OceanCorrectorConfig
-from fme.core.corrector.ice import IceCorrectorConfig
 from fme.core.dataset.concat import ConcatDatasetConfig
 from fme.core.dataset.merged import MergeDatasetConfig, MergeNoConcatDatasetConfig
 from fme.core.dataset.time import RepeatedInterval, TimeSlice

@@ -273,6 +273,8 @@ class CoupledStepperConfig:
             variable names must be distinct from the ocean's output names.
         sst_name: Name of the liquid sea surface temperature field in the ocean data.
             Must be present in the ocean's output names.
+        ts_name: Name of the frozen ice (or snow) surface skin temperature field in the
+            ice data. Must be present in the ice's output names.
         ocean_fraction_prediction: (Optional) Configuration for ocean-generated
             ocean fraction to replace the ocean fraction variable specified in the
             atmosphere's OceanConfig. If the atmosphere uses the ocean fraction as
@@ -284,6 +286,7 @@ class CoupledStepperConfig:
     atmosphere: ComponentConfig | None = None
     ice: ComponentConfig | None = None
     sst_name: str = "sst"
+    ts_name: str = "TS"
     ocean_fraction_prediction: CoupledOceanFractionConfig | None = None
 
     def __post_init__(self):
@@ -474,7 +477,7 @@ class CoupledStepperConfig:
                     self.atmosphere.stepper.output_names
                 )
             )
-            extra_forcings_names = []
+            extra_forcings_names = [self.ts_name]
             if self.ocean_fraction_prediction is not None:
                 # NOTE: this is only necessary for the special case where the
                 # atmosphere doesn't use the sea ice fraction as an ML forcing
@@ -588,9 +591,9 @@ class CoupledStepperConfig:
                 )
             )
             self._ice_to_atmosphere_forcing_names = list(
-                set(self.atmosphere.stepper.input_only_names).intersection(
-                    self.ice.stepper.output_names
-                )
+                set(self.atmosphere.stepper.input_only_names)
+                .intersection(self.ice.stepper.output_names)
+                .union([self.ts_name])
             )
             self._ice_to_ocean_forcing_names = list(
                 set(self.ocean.stepper.input_only_names).intersection(
@@ -1925,12 +1928,54 @@ class CoupledStepper:
             )
             forcing_data.update(forcings_from_ice)
         return forcing_data
+    
+    def _get_ice_forcings(
+        self,
+        ice_data: TensorMapping,
+        ocean_ic: TensorMapping | None = None,
+        atmos_ic: TensorMapping | None = None,
+    ) -> TensorDict:
+        """
+        Get the forcings for the ice component.
+
+        Args:
+            ice_data: Ice batch data, including initial condition and forward
+                steps.
+            ocean_ic: Ocean initial condition state, including SST.
+            atmos_ic: Atmosphere initial condition state, including surface temperature.
+        """
+        time_dim = self.ice.TIME_DIM
+        sizes = [-1] * len(next(iter(ice_data.values())).shape)
+        sizes[time_dim] = self.n_inner_steps + 1
+        # exogenous forcings are used as is
+        forcing_data = {
+            k: ice_data[k] for k in self._ice_forcing_exogenous_names
+        }
+        # forcings from ocean are constant during the fast atmosphere steps
+        # NOTE: only n_ic_timesteps = 1 is currently supported
+        assert next(iter(ocean_ic.values())).shape[self.ocean.TIME_DIM] == 1
+        forcings_from_ocean = {
+            k: ocean_ic[k].expand(*sizes)
+            for k in self._ocean_to_ice_forcing_names
+        }
+        
+        # update ice forcings
+        forcing_data.update(forcings_from_ocean)
+        if atmos_ic is not None:
+            forcings_from_atmosphere = {
+                k: atmos_ic[k].expand(*sizes)
+                for k in self._atmosphere_to_ice_forcing_names
+            }
+            forcing_data.update(forcings_from_atmosphere)
+        return forcing_data
 
     def _get_ocean_forcings(
         self,
         ocean_data: TensorMapping,
-        atmos_gen: TensorMapping,
-        atmos_forcings: TensorMapping,
+        atmos_gen: TensorMapping | None = None,
+        atmos_forcings: TensorMapping | None = None,
+        ice_gen: TensorMapping | None = None,
+        ice_forcings: TensorMapping | None = None,
     ) -> TensorDict:
         """
         Get the forcings for the ocean component.
@@ -1954,27 +1999,51 @@ class CoupledStepper:
             )
         }
         # get time-averaged forcings from atmosphere
-        forcings_from_atmosphere = {
-            **{
-                k: atmos_gen[k].mean(time_dim, keepdim=True)
-                for k in self._atmosphere_to_ocean_forcing_names
-            },
-            **{
-                k: atmos_forcings[k].mean(time_dim, keepdim=True)
-                for k in self._shared_forcing_exogenous_names
-            },
-        }
-        # append or prepend nans depending on whether or not the forcing is a
-        # "next step" forcing
-        forcings_from_atmosphere = {
-            k: (
-                torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
-                if k in self._config.ocean_next_step_forcing_names
-                else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
-            )
-            for k, v in forcings_from_atmosphere.items()
-        }
-        forcing_data.update(forcings_from_atmosphere)
+        if atmos_gen is not None:
+            forcings_from_atmosphere = {
+                **{
+                    k: atmos_gen[k].mean(time_dim, keepdim=True)
+                    for k in self._atmosphere_to_ocean_forcing_names
+                },
+                **{
+                    k: atmos_forcings[k].mean(time_dim, keepdim=True)
+                    for k in self._shared_forcing_exogenous_names
+                },
+            }
+            # append or prepend nans depending on whether or not the forcing is a
+            # "next step" forcing
+            forcings_from_atmosphere = {
+                k: (
+                    torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
+                    if k in self._config.ocean_next_step_forcing_names
+                    else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
+                )
+                for k, v in forcings_from_atmosphere.items()
+            }
+            forcing_data.update(forcings_from_atmosphere)
+        if ice_gen is not None:
+            forcings_from_ice = {
+                **{
+                    k: ice_gen[k].mean(time_dim, keepdim=True)
+                    for k in self._ice_to_ocean_forcing_names
+                },
+                **{
+                    k: ice_forcings[k].mean(time_dim, keepdim=True)
+                    for k in self._shared_forcing_exogenous_names
+                },
+            }
+            # append or prepend nans depending on whether or not the forcing is a
+            # "next step" forcing
+            forcings_from_ice = {
+                k: (
+                    torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
+                    if k in self._config.ocean_next_step_forcing_names
+                    else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
+                )
+                for k, v in forcings_from_ice.items()
+            }
+            forcing_data.update(forcings_from_ice)
+
         return forcing_data
 
     def get_prediction_generator(
@@ -2137,9 +2206,9 @@ class CoupledStepper:
             )
             ocean_forcings = BatchData(
                 data=self._get_ocean_forcings(
-                    ocean_window.data,
-                    atmos_gen,
-                    atmos_data_forcings.data,
+                    ocean_data=ocean_window.data,
+                    atmos_gen=atmos_gen,
+                    atmos_forcings=atmos_data_forcings.data,
                 ),
                 time=ocean_window.time,
                 labels=ocean_window.labels,
@@ -2232,19 +2301,13 @@ class CoupledStepper:
             )
             ice_forcings = BatchData(
                 data=self._get_ice_forcings(
-                    ice_window.data,
-                    ocean_ic_state.as_batch_data().data,
+                    ice_data=ice_window.data,
+                    ocean_ic=ocean_ic_state.as_batch_data().data,
                 ),
                 time=ice_window.time,
                 labels=ice_window.labels,
             )
-            # prescribe the initial condition SST state
-            ice_ic_state = self._prescribe_ic_sst(
-                ice_ic_state,
-                ice_forcings.select_time_slice(
-                    slice(None, self.ice.n_ic_timesteps)
-                ),
-            )
+            
             ice_generator = self.ice.get_prediction_generator(
                 ice_ic_state,
                 ice_forcings,
@@ -2278,7 +2341,9 @@ class CoupledStepper:
             )
             ocean_forcings = BatchData(
                 data=self._get_ocean_forcings(
-                    ocean_window.data, ice_gen, ice_data_forcings.data
+                    ocean_data=ocean_window.data,
+                    ice_gen=ice_gen,
+                    ice_forcings=ice_data_forcings.data
                 ),
                 time=ocean_window.time,
                 labels=ocean_window.labels,
@@ -2416,7 +2481,9 @@ class CoupledStepper:
             )
             ice_forcings = BatchData(
                 data=self._get_ice_forcings(
-                    ice_window.data, atmos_gen, atmos_data_forcings.data
+                    ice_data=ice_window.data,
+                    atmos_gen=atmos_gen,
+                    atmos_forcings=atmos_data_forcings.data
                 ),
                 time=ice_window.time,
                 labels=ice_window.labels,
@@ -2550,8 +2617,8 @@ class CoupledStepper:
             )
             ice_forcings = BatchData(
                 data=self._get_ice_forcings(
-                    ice_window.data,
-                    ocean_ic_state.as_batch_data().data,
+                    ice_data=ice_window.data,
+                    ocean_ic=ocean_ic_state.as_batch_data().data,
                 ),
                 time=ice_window.time,
                 labels=ice_window.labels,
@@ -2613,11 +2680,11 @@ class CoupledStepper:
             )
             ocean_forcings = BatchData(
                 data=self._get_ocean_forcings(
-                    ocean_window.data,
-                    atmos_gen,
-                    atmos_data_forcings.data,
-                    ice_gen,
-                    ice_data_forcings.data,
+                    ocean_data=ocean_window.data,
+                    atmos_gen=atmos_gen,
+                    atmos_forcings=atmos_data_forcings.data,
+                    ice_gen=ice_gen,
+                    ice_forcings=ice_data_forcings.data,
                 ),
                 time=ocean_window.time,
                 labels=ocean_window.labels,
@@ -2950,15 +3017,16 @@ def _process_ensemble_output_list(
         ensemble dimension.
 
     """
-    atmos_gen_data = process_ensemble_prediction_generator_list(
-        [x.detach().data for x in output_list if x.realm == "atmosphere"],
-    )
-    ocean_gen_data = process_ensemble_prediction_generator_list(
-        [x.detach().data for x in output_list if x.realm == "ocean"],
-    )
-    ice_gen_data = process_ensemble_prediction_generator_list(
-        [x.detach().data for x in output_list if x.realm == "ice"],
-    )
+    atmos_gen_data = [x.detach().data for x in output_list if x.realm == "atmosphere"]
+    ocean_gen_data = [x.detach().data for x in output_list if x.realm == "ocean"]
+    ice_gen_data = [x.detach().data for x in output_list if x.realm == "ice"]
+    if len(atmos_gen_data) > 0:
+        atmos_gen_data = process_ensemble_prediction_generator_list(atmos_gen_data)
+    if len(ocean_gen_data) > 0:
+        ocean_gen_data = process_ensemble_prediction_generator_list(ocean_gen_data)
+    if len(ice_gen_data) > 0:
+        ice_gen_data = process_ensemble_prediction_generator_list(ice_gen_data)
+    
     return ocean_gen_data, atmos_gen_data, ice_gen_data
 
 

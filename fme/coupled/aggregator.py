@@ -148,11 +148,14 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         batch: CoupledTrainOutput,
     ):
         if self._num_channels_ocean is None:
-            self._num_channels_ocean = len(batch.ocean.gen_data)
+            if batch.ocean is not None:
+                self._num_channels_ocean = len(batch.ocean.gen_data)
         if self._num_channels_ice is None:
-            self._num_channels_ice = len(batch.ice.gen_data)
+            if batch.ice is not None:
+                self._num_channels_ice = len(batch.ice.gen_data)
         if self._num_channels_atmos is None:
-            self._num_channels_atmos = len(batch.atmosphere.gen_data)
+            if batch.atmosphere is not None:
+                self._num_channels_atmos = len(batch.atmosphere.gen_data)
         self._loss += batch.total_metrics["loss"]
         if "ocean" in self._aggregators:
             self._aggregators["ocean"].record_batch(batch.ocean)
@@ -428,10 +431,10 @@ class InferenceEvaluatorAggregatorConfig:
 
 def _combine_logs(
     n_fast_steps_per_slow_step: int,
-    step_key="mean/forecast_step",
     ocean_logs: InferenceLogs | None = None,
     ice_logs: InferenceLogs | None = None,
     atmos_logs: InferenceLogs | None = None,
+    step_key="mean/forecast_step",
 ) -> InferenceLogs:
     """
     Combines ocean, ice, and atmosphere logs into a single list of logs such
@@ -566,6 +569,7 @@ class InferenceEvaluatorAggregator(
         atmosphere_channel_mean_names: Sequence[str] | None = None,
     ):
         self._record_ocean_step_20 = n_timesteps_ocean >= 20
+        self._record_ice_step_20 = n_timesteps_ice >= 20
         self._record_atmos_step_20 = n_timesteps_atmosphere >= 20
 
         self._aggregators = {
@@ -673,16 +677,40 @@ class InferenceEvaluatorAggregator(
         if self._num_channels_ocean is None:
             self._num_channels_ocean = len(data.ocean_data.prediction)
         if self._num_channels_ice is None:
-            self._num_channels_ocean = len(data.ice_data.prediction)
+            self._num_channels_ice = len(data.ice_data.prediction)
         if self._num_channels_atmos is None:
             self._num_channels_atmos = len(data.atmosphere_data.prediction)
-        ocean_logs = self.ocean.record_batch(data.ocean_data)
-        ice_logs = self.ice.record_batch(data.ice_data)
-        atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
-        n_times_ocean = data.ocean_data.time["time"].size
-        n_times_ice = data.ice_data.time["time"].size
-        n_times_atmos = data.atmosphere_data.time["time"].size
-        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_times_atmos // n_times_ocean)
+  
+        if self.atmosphere is None:
+            atmos_logs = None
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            ice_logs = self.ice.record_batch(data.ice_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_ice = data.ice_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_ice // n_times_ocean
+        elif self.ice is None:
+            ice_logs = None
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ocean
+        elif self.ocean is None:
+            ocean_logs = None
+            ice_logs = self.ice.record_batch(data.ice_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ice = data.ice_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ice
+        else:
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            ice_logs = self.ice.record_batch(data.ice_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ocean
+        
+        return _combine_logs(n_fast_steps_per_slow_step, ocean_logs, ice_logs, atmos_logs)
 
     @torch.no_grad()
     def record_initial_condition(
@@ -694,13 +722,20 @@ class InferenceEvaluatorAggregator(
 
         May only be recorded once, before any calls to record_batch.
         """
-        ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
-        ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
-        atmos_logs = self.atmosphere.record_initial_condition(
-            initial_condition.atmosphere_data
-        )
+        ocean_logs = None
+        if self.ocean is not None:
+            ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
+        ice_logs = None
+        if self.ice is not None:
+            ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
+        atmos_logs = None
+        if self.atmosphere is not None:
+            atmos_logs = self.atmosphere.record_initial_condition(
+                initial_condition.atmosphere_data
+            )
+        n_atmos_steps_per_ocean_step = 1
         # initial condition "steps" must align, so record both
-        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
+        return _combine_logs(n_atmos_steps_per_ocean_step, ocean_logs, ice_logs, atmos_logs)
 
     @torch.no_grad()
     def get_summary_logs(self) -> InferenceLog:
@@ -913,13 +948,36 @@ class InferenceAggregator(
 
     @torch.no_grad()
     def record_batch(self, data: CoupledPairedData) -> InferenceLogs:
-        ocean_logs = self.ocean.record_batch(data.ocean_data)
-        ice_logs = self.ice.record_batch(data.ice_data)
-        atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
-        n_times_ocean = data.ocean_data.time["time"].size
-        n_times_ice = data.ice_data.time["time"].size
-        n_times_atmos = data.atmosphere_data.time["time"].size
-        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_times_atmos // n_times_ocean)
+        if self.atmosphere is None:
+            atmos_logs = None
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            ice_logs = self.ice.record_batch(data.ice_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_ice = data.ice_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_ice // n_times_ocean
+        elif self.ice is None:
+            ice_logs = None
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ocean
+        elif self.ocean is None:
+            ocean_logs = None
+            ice_logs = self.ice.record_batch(data.ice_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ice = data.ice_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ice
+        else:
+            ocean_logs = self.ocean.record_batch(data.ocean_data)
+            ice_logs = self.ice.record_batch(data.ice_data)
+            atmos_logs = self.atmosphere.record_batch(data.atmosphere_data)
+            n_times_ocean = data.ocean_data.time["time"].size
+            n_times_atmos = data.atmosphere_data.time["time"].size
+            n_fast_steps_per_slow_step = n_times_atmos // n_times_ocean
+        
+        return _combine_logs(n_fast_steps_per_slow_step, ocean_logs, ice_logs, atmos_logs)
 
     @torch.no_grad()
     def record_initial_condition(
@@ -931,13 +989,20 @@ class InferenceAggregator(
 
         May only be recorded once, before any calls to record_batch.
         """
-        ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
-        ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
-        atmos_logs = self.atmosphere.record_initial_condition(
-            initial_condition.atmosphere_data
-        )
+        ocean_logs = None
+        if self.ocean is not None:
+            ocean_logs = self.ocean.record_initial_condition(initial_condition.ocean_data)
+        ice_logs = None
+        if self.ice is not None:
+            ice_logs = self.ice.record_initial_condition(initial_condition.ice_data)
+        atmos_logs = None
+        if self.atmosphere is not None:
+            atmos_logs = self.atmosphere.record_initial_condition(
+                initial_condition.atmosphere_data
+            )
+        n_atmos_steps_per_ocean_step = 1
         # initial condition "steps" must align, so record both
-        return _combine_logs(ocean_logs, ice_logs, atmos_logs, n_atmos_steps_per_ocean_step=1)
+        return _combine_logs(n_atmos_steps_per_ocean_step, ocean_logs, ice_logs, atmos_logs)
 
     def get_summary_logs(self) -> InferenceLog:
         ocean_logs = self.ocean.get_summary_logs()
