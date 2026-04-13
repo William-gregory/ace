@@ -224,7 +224,10 @@ class CoupledDatasetProperties:
 
     @property
     def timestep(self) -> datetime.timedelta:
-        return self.ocean_timestep
+        if self.ocean is not None:
+            return self.ocean_timestep
+        else:
+            return self.ice_timestep
 
     @property
     def is_remote(self) -> bool:
@@ -249,7 +252,14 @@ class CoupledDatasetProperties:
 
     @property
     def n_inner_steps(self) -> int:
-        return self.ocean_timestep // self.atmosphere_timestep
+        if self.atmosphere is None:
+            return self.ocean_timestep // self.ice_timestep
+        elif self.ice is None:
+            return self.ocean_timestep // self.atmosphere_timestep
+        elif self.ocean is None:
+            return self.ice_timestep // self.atmosphere_timestep
+        else:
+            return self.ocean_timestep // self.atmosphere_timestep
 
     @property
     def coords(self) -> CoupledCoords:
@@ -410,7 +420,14 @@ class CoupledDataset:
 
     @property
     def all_ic_times(self) -> xr.CFTimeIndex:
-        return self._ocean.sample_start_times
+        if self._atmosphere is None:
+            return self._ocean.sample_start_times
+        elif self._ice is None:
+            return self._ocean.sample_start_times
+        elif self._ocean is None:
+            return self._ice.sample_start_times
+        else:
+            return self._ocean.sample_start_times
 
     def __len__(self):
         if self._atmosphere is None:

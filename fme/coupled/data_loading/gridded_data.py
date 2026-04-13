@@ -257,21 +257,21 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
         ocean = None
         ice = None
         atmosphere = None
-        if self._ocean is not None:
+        if self._properties.ocean is not None:
             ocean = DatasetInfo(
                 horizontal_coordinates=self._properties.ocean.horizontal_coordinates,
                 vertical_coordinate=self._properties.ocean.vertical_coordinate,
                 mask_provider=self._properties.ocean.mask_provider,
                 timestep=self.ocean_timestep,
             )
-        if self._atmosphere is not None:
+        if self._properties.atmosphere is not None:
             atmosphere = DatasetInfo(
                 horizontal_coordinates=self._properties.atmosphere.horizontal_coordinates,
                 vertical_coordinate=self._properties.atmosphere.vertical_coordinate,
                 mask_provider=self._properties.atmosphere.mask_provider,
                 timestep=self.atmosphere_timestep,
             )
-        if self._ice is not None:
+        if self._properties.ice is not None:
             ice = DatasetInfo(
                 horizontal_coordinates=self._properties.ice.horizontal_coordinates,
                 vertical_coordinate=self._properties.ice.vertical_coordinate,
@@ -314,13 +314,52 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
 
     @property
     def initial_time(self) -> xr.DataArray:
-        atmosphere_data = self.initial_condition.as_batch_data().atmosphere_data
-        ocean_data = self.initial_condition.as_batch_data().ocean_data
-        atmosphere_initial_time = atmosphere_data.time.isel(time=0)
-        ocean_initial_time = ocean_data.time.isel(time=0)
-        np.testing.assert_array_equal(
-            atmosphere_initial_time,
-            ocean_initial_time,
-            err_msg="Atmosphere and ocean initial times must be the same",
-        )
-        return atmosphere_initial_time
+        if self._properties.atmosphere is None:
+            ocean_data = self.initial_condition.as_batch_data().ocean_data
+            ocean_initial_time = ocean_data.time.isel(time=0)
+            ice_data = self.initial_condition.as_batch_data().ice_data
+            ice_initial_time = ice_data.time.isel(time=0)
+            print('ocean_time',ocean_initial_time,flush=True)
+            print('ice_time',ice_initial_time,flush=True)
+            np.testing.assert_array_equal(
+                ice_initial_time,
+                ocean_initial_time,
+                err_msg="Ice and ocean initial times must be the same",
+            )
+            return ice_initial_time
+        elif self._properties.ice is None:
+            ocean_data = self.initial_condition.as_batch_data().ocean_data
+            ocean_initial_time = ocean_data.time.isel(time=0)
+            atmosphere_data = self.initial_condition.as_batch_data().atmosphere_data
+            atmosphere_initial_time = atmosphere_data.time.isel(time=0)
+            np.testing.assert_array_equal(
+                atmosphere_initial_time,
+                ocean_initial_time,
+                err_msg="Atmosphere and ocean initial times must be the same",
+            )
+            return atmosphere_initial_time
+        elif self._properties.ocean is None:
+            ice_data = self.initial_condition.as_batch_data().ice_data
+            ice_initial_time = ice_data.time.isel(time=0)
+            atmosphere_data = self.initial_condition.as_batch_data().atmosphere_data
+            atmosphere_initial_time = atmosphere_data.time.isel(time=0)
+            np.testing.assert_array_equal(
+                atmosphere_initial_time,
+                ice_initial_time,
+                err_msg="Atmosphere and ice initial times must be the same",
+            )
+            return atmosphere_initial_time
+        else:
+            ocean_data = self.initial_condition.as_batch_data().ocean_data
+            ocean_initial_time = ocean_data.time.isel(time=0)
+            ice_data = self.initial_condition.as_batch_data().ice_data
+            ice_initial_time = ice_data.time.isel(time=0)
+            atmosphere_data = self.initial_condition.as_batch_data().atmosphere_data
+            atmosphere_initial_time = atmosphere_data.time.isel(time=0)
+            np.testing.assert_array_equal(
+                atmosphere_initial_time,
+                ocean_initial_time,
+                ice_initial_time,
+                err_msg="Atmosphere, ice, and ocean initial times must be the same",
+            )
+            return atmosphere_initial_time

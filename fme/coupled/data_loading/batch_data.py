@@ -5,6 +5,7 @@ from typing import TypeVar
 import numpy as np
 
 from fme.ace.data_loading.batch_data import BatchData, PairedData, PrognosticState
+from fme.core.coordinates import NullDeriveFn
 from fme.core.labels import LabelEncoding
 from fme.core.typing_ import TensorDict, TensorMapping
 from fme.coupled.data_loading.data_typing import CoupledDatasetItem
@@ -258,9 +259,12 @@ class CoupledBatchData:
             )
         ice_data = None
         if self.ice_data is not None:
-            ice_data=self.ice_data.compute_derived_variables(
-                ice_derive_func, forcing_data.ice_data
-            )
+            if isinstance(ice_derive_func, NullDeriveFn):
+                ice_data = self.ice_data
+            else:
+                ice_data=self.ice_data.compute_derived_variables(
+                    ice_derive_func, forcing_data.ice_data
+                )
         atmosphere_data = None
         if self.atmosphere_data is not None:
             atmosphere_data=self.atmosphere_data.compute_derived_variables(

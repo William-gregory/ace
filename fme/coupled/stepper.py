@@ -1533,18 +1533,15 @@ class CoupledTrainOutput(TrainOutputABC):
         )
 
     def compute_derived_variables(self) -> "CoupledTrainOutput":
+        ocean_info = None
         if self.ocean is not None:
             ocean_info = self.ocean.compute_derived_variables()
-        else:
-            ocean_info = None
+        ice_info = None
         if self.ice is not None:
             ice_info = self.ice.compute_derived_variables()
-        else:
-            ice_info = None
+        atmosphere_info = None
         if self.atmosphere is not None:
             atmosphere_info = self.atmosphere.compute_derived_variables()
-        else:
-            atmosphere_info = None
         return CoupledTrainOutput(
             total_metrics=self.total_metrics,
             ocean=ocean_info,
@@ -2763,18 +2760,33 @@ class CoupledStepper:
         gen_data = self._process_prediction_generator_list(output_list, forcing)
         if compute_derived_variables:
             with timer.context("compute_derived_variables"):
+                ocean_func = None
+                ocean_timesteps = None
+                if self.ocean is not None:
+                    ocean_func = self.ocean.derive_func
+                    ocean_timesteps = self.ocean.n_ic_timesteps
+                ice_func = None
+                ice_timesteps = None
+                if self.ice is not None:
+                    ice_func = self.ice.derive_func
+                    ice_timesteps = self.ice.n_ic_timesteps
+                atmos_func = None
+                atmos_timesteps = None
+                if self.atmosphere is not None:
+                    atmos_func = self.atmosphere.derive_func
+                    atmos_timesteps = self.atmosphere.n_ic_timesteps
                 gen_data = (
                     gen_data.prepend(initial_condition)
                     .compute_derived_variables(
-                        ocean_derive_func=self.ocean.derive_func,
-                        ice_derive_func=self.ice.derive_func,
-                        atmosphere_derive_func=self.atmosphere.derive_func,
+                        ocean_derive_func=ocean_func,
+                        ice_derive_func=ice_func,
+                        atmosphere_derive_func=atmos_func,
                         forcing_data=forcing,
                     )
                     .remove_initial_condition(
-                        n_ic_timesteps_ocean=self.ocean.n_ic_timesteps,
-                        n_ic_timesteps_ice=self.ice.n_ic_timesteps,
-                        n_ic_timesteps_atmosphere=self.atmosphere.n_ic_timesteps,
+                        n_ic_timesteps_ocean=ocean_timesteps,
+                        n_ic_timesteps_ice=ice_timesteps,
+                        n_ic_timesteps_atmosphere=atmos_timesteps
                     )
                 )
         return gen_data

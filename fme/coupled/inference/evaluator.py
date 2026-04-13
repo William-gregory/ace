@@ -69,10 +69,6 @@ class StandaloneComponentCheckpointsConfig:
     ice: StandaloneComponentConfig | None = None
     atmosphere: StandaloneComponentConfig | None = None
     sst_name: str = "sst"
-    bheat_name: str | None = None
-    ssh_name: str | None = None
-    tauuo_name: str | None = None
-    tauvo_name: str | None = None
     ocean_fraction_prediction: CoupledOceanFractionConfig | None = None
 
     def load_stepper_config(self) -> CoupledStepperConfig:
@@ -99,33 +95,37 @@ class StandaloneComponentCheckpointsConfig:
             ice=ice_config,
             atmosphere=atmos_config,
             sst_name=self.sst_name,
-            bheat_name=self.bheat_name,
-            ssh_name=self.ssh_name,
-            tauuo_name=self.tauuo_name,
-            tauvo_name=self.tauvo_name,
             ocean_fraction_prediction=self.ocean_fraction_prediction,
         )
 
     def load_stepper(self) -> CoupledStepper:
         ocean = None
+        ocean_data = None
         ice = None
+        ice_data = None
         atmos = None
+        atmos_data = None
         if self.ocean is not None:
             ocean = load_single_stepper(self.ocean.path)
+            ocean_data = ocean.training_dataset_info
         if self.ice is not None:
             ice = load_single_stepper(self.ice.path)
+            ice_data = ice.training_dataset_info
         if self.atmosphere is not None:
             atmos = load_single_stepper(self.atmosphere.path)
+            atmos_data = atmos.training_dataset_info
 
         dataset_info = CoupledDatasetInfo(
-            ocean=ocean.training_dataset_info,
-            atmosphere=atmosphere.training_dataset_info,
+            ocean=ocean_data,
+            ice=ice_data,
+            atmosphere=atmos_data,
         )
 
         return CoupledStepper(
             config=self.load_stepper_config(),
             ocean=ocean,
-            atmosphere=atmosphere,
+            ice=ice,
+            atmosphere=atmos,
             dataset_info=dataset_info,
         )
 
@@ -144,13 +144,20 @@ def load_stepper_config(
         standalone ocean and atmosphere checkpoints.
     """
     if isinstance(checkpoint_path, StandaloneComponentCheckpointsConfig):
-        logging.info(
-            f"Loading ocean model checkpoint from {checkpoint_path.ocean.path}"
-        )
-        logging.info(
-            "Loading atmosphere model checkpoint from "
-            f"{checkpoint_path.atmosphere.path}"
-        )
+        if checkpoint_path.ocean is not None:
+            logging.info(
+                f"Loading ocean model checkpoint from {checkpoint_path.ocean.path}"
+            )
+        if checkpoint_path.ice is not None:
+            logging.info(
+                "Loading ice model checkpoint from "
+                f"{checkpoint_path.ice.path}"
+            )
+        if checkpoint_path.atmosphere is not None:
+            logging.info(
+                "Loading atmosphere model checkpoint from "
+                f"{checkpoint_path.atmosphere.path}"
+            )
         return checkpoint_path.load_stepper_config()
 
     logging.info(f"Loading trained coupled model checkpoint from {checkpoint_path}")
@@ -176,13 +183,19 @@ def load_stepper(
         standalone ocean and atmosphere checkpoints.
     """
     if isinstance(checkpoint_path, StandaloneComponentCheckpointsConfig):
-        logging.info(
-            f"Loading ocean model checkpoint from {checkpoint_path.ocean.path}"
-        )
-        logging.info(
-            "Loading atmosphere model checkpoint from "
-            f"{checkpoint_path.atmosphere.path}"
-        )
+        if checkpoint_path.ocean is not None:
+            logging.info(
+                f"Loading ocean model checkpoint from {checkpoint_path.ocean.path}"
+            )
+        if checkpoint_path.ice is not None:
+            logging.info(
+                f"Loading ice model checkpoint from {checkpoint_path.ice.path}"
+            )
+        if checkpoint_path.atmosphere is not None:
+            logging.info(
+                "Loading atmosphere model checkpoint from "
+                f"{checkpoint_path.atmosphere.path}"
+            )
         return checkpoint_path.load_stepper()
 
     return load_coupled_stepper(checkpoint_path)
@@ -260,6 +273,16 @@ class InferenceEvaluatorConfig:
                 raise ValueError(
                     f"Ocean time_coarsen config invalid with error: {str(err)}"
                 )
+        if self.data_writer.ice.time_coarsen is not None:
+            try:
+                self.data_writer.ice.time_coarsen.validate(
+                    self.coupled_steps_in_memory * data.n_inner_steps,
+                    self.n_coupled_steps * data.n_inner_steps,
+                )
+            except ValueError as err:
+                raise ValueError(
+                    f"Ice time_coarsen config invalid with error: {str(err)}"
+                )
         if self.data_writer.atmosphere.time_coarsen is not None:
             try:
                 self.data_writer.atmosphere.time_coarsen.validate(
@@ -275,6 +298,7 @@ class InferenceEvaluatorConfig:
         dataset_metadata = DatasetMetadata.from_env()
         coupled_dataset_metadata = {
             "ocean": dataset_metadata,
+            "ice": dataset_metadata,
             "atmosphere": dataset_metadata,
         }
         return self.data_writer.build_paired(
@@ -298,14 +322,18 @@ class _Deriver(CoupledDeriver):
 
     def __init__(
         self,
-        n_ic_timesteps_ocean: int,
-        n_ic_timesteps_atmosphere: int,
-        ocean_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict],
-        atmosphere_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict],
+        n_ic_timesteps_ocean: int | None = None,
+        n_ic_timesteps_ice: int | None = None,
+        n_ic_timesteps_atmosphere: int | None = None,
+        ocean_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict] | None = None,
+        atmosphere_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict] | None = None,
+        ice_derive_func: Callable[[TensorMapping, TensorMapping], TensorDict] | None = None,
     ):
         self._n_ic_timesteps_ocean = n_ic_timesteps_ocean
+        self._n_ic_timesteps_ice = n_ic_timesteps_ice
         self._n_ic_timesteps_atmosphere = n_ic_timesteps_atmosphere
         self._ocean_derive_func = ocean_derive_func
+        self._ice_derive_func = ice_derive_func
         self._atmosphere_derive_func = atmosphere_derive_func
 
     def get_forward_data(
@@ -318,11 +346,13 @@ class _Deriver(CoupledDeriver):
             with timer.context("compute_derived_variables"):
                 data = data.compute_derived_variables(
                     ocean_derive_func=self._ocean_derive_func,
+                    ice_derive_func=self._ice_derive_func,
                     atmosphere_derive_func=self._atmosphere_derive_func,
                     forcing_data=data,
                 )
         return data.remove_initial_condition(
             n_ic_timesteps_ocean=self._n_ic_timesteps_ocean,
+            n_ic_timesteps_ice=self._n_ic_timesteps_ice,
             n_ic_timesteps_atmosphere=self._n_ic_timesteps_atmosphere,
         )
 
@@ -370,21 +400,55 @@ def run_evaluator_from_config(config: InferenceEvaluatorConfig):
 
     aggregator_config: InferenceEvaluatorAggregatorConfig = config.aggregator
     batch = next(iter(data.loader))
-    initial_time = batch.ocean_data.time.isel(time=0)
+    if stepper.ocean is None:
+        initial_time = batch.ice_data.time.isel(time=0)
+    else:
+        initial_time = batch.ocean_data.time.isel(time=0)
+
     variable_metadata = get_derived_variable_metadata() | data.variable_metadata
     dataset_info = data.dataset_info.update_variable_metadata(variable_metadata)
-    n_timesteps_ocean = config.n_coupled_steps + stepper.ocean.n_ic_timesteps
-    n_timesteps_atmosphere = (
-        config.n_coupled_steps * stepper.n_inner_steps
-        + stepper.atmosphere.n_ic_timesteps
-    )
+    n_timesteps_ocean = None
+    n_timesteps_atmosphere = None
+    n_timesteps_ice = None
+    ocean_norm = None
+    atmosphere_norm = None
+    ice_norm = None
+    n_ic_timesteps_ocean = None
+    n_ic_timesteps_atmosphere = None
+    n_ic_timesteps_ice = None
+    ocean_deriv = None
+    atmosphere_deriv = None
+    ice_deriv = None
+    if stepper.ocean is not None:
+        n_ic_timesteps_ocean = stepper.ocean.n_ic_timesteps
+        n_timesteps_ocean = config.n_coupled_steps + n_ic_timesteps_ocean
+        ocean_norm = stepper.ocean.normalizer.normalize
+        ocean_deriv = stepper.ocean.derive_func
+    if stepper.ice is not None:
+        n_ic_timesteps_ice = stepper.ice.n_ic_timesteps
+        n_timesteps_ice = (
+            config.n_coupled_steps * stepper.n_inner_steps
+            + n_ic_timesteps_ice
+        )
+        ice_norm = stepper.ice.normalizer.normalize
+        ice_deriv = stepper.ice.derive_func
+    if stepper.atmosphere is not None:
+        n_ic_timesteps_atmosphere = stepper.atmosphere.n_ic_timesteps
+        n_timesteps_atmosphere = (
+            config.n_coupled_steps * stepper.n_inner_steps
+            + n_ic_timesteps_atmosphere
+        )
+        atmosphere_norm = stepper.atmosphere.normalizer.normalize
+        atmosphere_deriv = stepper.atmosphere.derive_func
     aggregator = aggregator_config.build(
         dataset_info=dataset_info,
         n_timesteps_ocean=n_timesteps_ocean,
         n_timesteps_atmosphere=n_timesteps_atmosphere,
+        n_timesteps_ice=n_timesteps_ice,
         initial_time=initial_time,
-        ocean_normalize=stepper.ocean.normalizer.normalize,
-        atmosphere_normalize=stepper.atmosphere.normalizer.normalize,
+        ocean_normalize=ocean_norm,
+        atmosphere_normalize=atmosphere_norm,
+        ice_normalize=ice_norm,
         output_dir=config.experiment_dir,
     )
 
@@ -401,11 +465,14 @@ def run_evaluator_from_config(config: InferenceEvaluatorConfig):
             initial_condition=initial_condition_requirements,
             dataset_info=stepper.training_dataset_info,
         )
+
         deriver = _Deriver(
-            n_ic_timesteps_ocean=stepper.ocean.n_ic_timesteps,
-            n_ic_timesteps_atmosphere=stepper.atmosphere.n_ic_timesteps,
-            ocean_derive_func=stepper.ocean.derive_func,
-            atmosphere_derive_func=stepper.atmosphere.derive_func,
+            n_ic_timesteps_ocean=n_ic_timesteps_ocean,
+            n_ic_timesteps_atmosphere=n_ic_timesteps_atmosphere,
+            n_ic_timesteps_ice=n_ic_timesteps_ice,
+            ocean_derive_func=ocean_deriv,
+            atmosphere_derive_func=atmosphere_deriv,
+            ice_derive_func=ice_deriv,
         )
         run_coupled_dataset_comparison(
             aggregator=aggregator,

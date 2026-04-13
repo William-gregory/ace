@@ -172,6 +172,7 @@ class InferenceEvaluatorAggregatorConfig:
     monthly_reference_data: str | None = None
     time_mean_reference_data: str | None = None
     log_nino34_index: bool = True
+    log_enso_coeff: bool = True
     log_step_means: list[StepMeanEntry] = dataclasses.field(
         default_factory=lambda: [StepMeanEntry(step=20)]
     )
@@ -219,6 +220,7 @@ class InferenceEvaluatorAggregatorConfig:
             log_step_means=self.log_step_means,
             channel_mean_names=channel_mean_names,
             log_nino34_index=self.log_nino34_index,
+            log_enso_coeff=self.log_enso_coeff,
             normalize=normalize,
             save_diagnostics=save_diagnostics,
         )
@@ -254,6 +256,7 @@ class InferenceEvaluatorAggregator(
         time_mean_reference_data: xr.Dataset | None = None,
         channel_mean_names: Sequence[str] | None = None,
         log_nino34_index: bool = True,
+        log_enso_coeff: bool = True,
         save_diagnostics: bool = True,
     ):
         """
@@ -282,6 +285,7 @@ class InferenceEvaluatorAggregator(
             channel_mean_names: Names over which to compute channel means. If not
                 provided, all available variables will be used.
             log_nino34_index: Whether to log the Nino34 index.
+            log_enso_coeff: Whether to log the ENSO coefficient.
             save_diagnostics: Whether to save reduced diagnostics to disk.
         """
         if save_diagnostics and output_dir is None:
@@ -423,7 +427,10 @@ class InferenceEvaluatorAggregator(
                         ),
                     )
                 )
-        if n_timesteps * timestep > SLIGHTLY_LESS_THAN_FIVE_YEARS:
+        if (
+            n_timesteps * timestep > SLIGHTLY_LESS_THAN_FIVE_YEARS
+            and log_enso_coeff
+        ):
             self._time_dependent_aggregators["enso_coefficient"] = (
                 EnsoCoefficientEvaluatorAggregator(
                     initial_time,

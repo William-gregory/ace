@@ -252,6 +252,7 @@ def get_inference_data(
     _force_forkserver: bool = False,
 ) -> InferenceGriddedData:
     initial_time = None
+    print('initial_condition',initial_condition,flush=True)
     if isinstance(initial_condition, CoupledPrognosticState):
         initial_time = (
             initial_condition.ocean_data.as_batch_data().time
@@ -337,7 +338,10 @@ def get_forcing_data(
     Returns:
         A data loader for forcing data with coordinates and metadata.
     """
-    initial_time = initial_condition.ocean_data.as_batch_data().time
+    if config.ocean is not None:
+        initial_time = initial_condition.ocean_data.as_batch_data().time
+    elif (config.ocean is None) & (config.ice is not None):
+        initial_time = initial_condition.ice_data.as_batch_data().time
     if initial_time.shape[1] != 1:
         raise NotImplementedError("code assumes initial time only has 1 timestep")
     if config.ocean is None:
