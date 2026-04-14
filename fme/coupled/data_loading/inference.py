@@ -125,12 +125,11 @@ class InferenceDataset(torch.utils.data.Dataset):
                     total_coupled_steps=total_coupled_steps,
                     ocean_reqs=ocean_reqs,
                 )
+            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
+            config.dataset.ice.update_subset(TimeSlice(start_time=ocean.first_time))
             ice, ice_properties = config.dataset.ice.build(
                 ice_reqs.names, ice_reqs.n_timesteps_schedule
             )
-            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
-            config.dataset.ice.update_subset(TimeSlice(start_time=ocean.first_time))
-
         elif config.dataset.ice is None:
             if config.dataset.ocean is not None:
                 ocean, ocean_properties = config.dataset.ocean.build(
@@ -144,12 +143,11 @@ class InferenceDataset(torch.utils.data.Dataset):
                     total_coupled_steps=total_coupled_steps,
                     ocean_reqs=ocean_reqs,
                 )
+            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
+            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ocean.first_time))
             atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
                 atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
             )
-            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
-            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ocean.first_time))
-        
         elif config.dataset.ocean is None:
             if config.dataset.ice is not None:
                 ice, ice_properties = config.dataset.ice.build(
@@ -163,11 +161,10 @@ class InferenceDataset(torch.utils.data.Dataset):
                     total_coupled_steps=total_coupled_steps,
                     ice_reqs=ice_reqs,
                 )
+            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ice.first_time))
             atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
                 atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
             )
-            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ice.first_time))
-        
         else:
             if config.dataset.ocean is not None:
                 ocean, ocean_properties = config.dataset.ocean.build(
@@ -181,22 +178,22 @@ class InferenceDataset(torch.utils.data.Dataset):
                     total_coupled_steps=total_coupled_steps,
                     ocean_reqs=ocean_reqs,
                 )
-                
+            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
+            config.dataset.ice.update_subset(TimeSlice(start_time=ocean.first_time))
+            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ocean.first_time))
             ice, ice_properties = config.dataset.ice.build(
                 ice_reqs.names, ice_reqs.n_timesteps_schedule
             )
             atmosphere, atmosphere_properties = config.dataset.atmosphere.build(
                 atmosphere_reqs.names, atmosphere_reqs.n_timesteps_schedule
             )
-            ocean_properties = self._update_ocean_mask(ocean_properties, dataset_info)
-            config.dataset.ice.update_subset(TimeSlice(start_time=ocean.first_time))
-            config.dataset.atmosphere.update_subset(TimeSlice(start_time=ocean.first_time))
-
+        
         properties = CoupledDatasetProperties(
             ocean=ocean_properties, 
             atmosphere=atmosphere_properties,
             ice=ice_properties,
         )
+
         dataset = CoupledDataset(
             ocean=ocean,
             atmosphere=atmosphere,
@@ -204,6 +201,7 @@ class InferenceDataset(torch.utils.data.Dataset):
             properties=properties,
             n_steps_fast=requirements.n_steps_fast,
         )
+
         self._dataset = dataset
         self._properties = properties
         self._coupled_steps_in_memory = (

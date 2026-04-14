@@ -285,16 +285,22 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
         return self._properties.variable_metadata
 
     @property
-    def ocean_timestep(self) -> datetime.timedelta:
-        return self._properties.ocean_timestep
+    def ocean_timestep(self) -> datetime.timedelta | None:
+        if self._properties.ocean is not None:
+            return self._properties.ocean_timestep
+        return None
     
     @property
-    def ice_timestep(self) -> datetime.timedelta:
-        return self._properties.ice_timestep
+    def ice_timestep(self) -> datetime.timedelta | None:
+        if self._properties.ice is not None:
+            return self._properties.ice_timestep
+        return None
 
     @property
-    def atmosphere_timestep(self) -> datetime.timedelta:
-        return self._properties.atmosphere_timestep
+    def atmosphere_timestep(self) -> datetime.timedelta | None:
+        if self._properties.atmosphere is not None:
+            return self._properties.atmosphere_timestep
+        return None
 
     @property
     def n_inner_steps(self) -> int:
@@ -319,8 +325,6 @@ class InferenceGriddedData(InferenceDataABC[CoupledPrognosticState, CoupledBatch
             ocean_initial_time = ocean_data.time.isel(time=0)
             ice_data = self.initial_condition.as_batch_data().ice_data
             ice_initial_time = ice_data.time.isel(time=0)
-            print('ocean_time',ocean_initial_time,flush=True)
-            print('ice_time',ice_initial_time,flush=True)
             np.testing.assert_array_equal(
                 ice_initial_time,
                 ocean_initial_time,

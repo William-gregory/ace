@@ -305,8 +305,10 @@ class InferenceEvaluatorConfig:
             experiment_dir=self.experiment_dir,
             initial_condition_times=data.initial_time.to_numpy(),
             n_timesteps_ocean=self.n_coupled_steps,
+            n_timesteps_ice=self.n_coupled_steps * data.n_inner_steps,
             n_timesteps_atmosphere=self.n_coupled_steps * data.n_inner_steps,
             ocean_timestep=data.ocean_timestep,
+            ice_timestep=data.ice_timestep,
             atmosphere_timestep=data.atmosphere_timestep,
             variable_metadata=variable_metadata,
             coords=data.coords,
@@ -440,6 +442,7 @@ def run_evaluator_from_config(config: InferenceEvaluatorConfig):
         )
         atmosphere_norm = stepper.atmosphere.normalizer.normalize
         atmosphere_deriv = stepper.atmosphere.derive_func
+    
     aggregator = aggregator_config.build(
         dataset_info=dataset_info,
         n_timesteps_ocean=n_timesteps_ocean,

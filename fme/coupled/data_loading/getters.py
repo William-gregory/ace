@@ -252,7 +252,6 @@ def get_inference_data(
     _force_forkserver: bool = False,
 ) -> InferenceGriddedData:
     initial_time = None
-    print('initial_condition',initial_condition,flush=True)
     if isinstance(initial_condition, CoupledPrognosticState):
         initial_time = (
             initial_condition.ocean_data.as_batch_data().time

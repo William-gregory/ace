@@ -71,13 +71,13 @@ class CoupledDataWriterConfig:
                 variable_metadata=variable_metadata,
                 coords=coords.ocean,
                 dataset_metadata=dataset_metadata["ocean"],
-            ),
+            )
         if ice_timestep is not None:
             ice_dir = os.path.join(experiment_dir, ICE_OUTPUT_DIR_NAME)
             makedirs(ice_dir, exist_ok=True)
             ice_writer=self.ice.build_paired(
                 experiment_dir=ice_dir,
-                n_initial_conditions=n_initial_conditions,
+                initial_condition_times=initial_condition_times,
                 n_timesteps=n_timesteps_ice,
                 timestep=ice_timestep,
                 variable_metadata=variable_metadata,
@@ -95,7 +95,7 @@ class CoupledDataWriterConfig:
                 variable_metadata=variable_metadata,
                 coords=coords.atmosphere,
                 dataset_metadata=dataset_metadata["atmosphere"],
-            ),
+            )
         
         return CoupledPairedDataWriter(
             ocean_writer=ocean_writer,
@@ -144,5 +144,5 @@ class CoupledPairedDataWriter(WriterABC[CoupledPrognosticState, CoupledPairedDat
             self._ocean_writer.finalize()
         if self._ice_writer is not None:
             self._ice_writer.finalize()
-        if self._ice_writer is not None:
+        if self._atmosphere_writer is not None:
             self._atmosphere_writer.finalize()

@@ -38,7 +38,9 @@ class CoupledCoords:
     @property
     def ice(self) -> dict[str, np.ndarray]:
         if self.ice_horizontal is not None:
-            return {**self.ice_vertical, **self.ice_horizontal}
+            if self.ice_vertical is not None:
+                return {**self.ice_vertical, **self.ice_horizontal}
+            return {**self.ice_horizontal}
         else:
             raise AttributeError("Ice component is None")
 
@@ -263,13 +265,27 @@ class CoupledDatasetProperties:
 
     @property
     def coords(self) -> CoupledCoords:
+        ocean_vcoord = None
+        ocean_hcoord = None
+        atmos_vcoord = None
+        atmos_hcoord = None
+        ice_hcoord = None
+        ice_vcoord = None
+        if self.ocean is not None:
+            ocean_vcoord = self.vertical_coordinate.ocean.coords
+            ocean_hcoord = dict(self.horizontal_coordinates.ocean.coords)
+        if self.ice is not None:
+            ice_vcoord = self.vertical_coordinate.ice.coords
+            ice_hcoord = dict(self.horizontal_coordinates.ice.coords)
+        if self.atmosphere is not None:
+            atmos_vcoord = self.vertical_coordinate.atmosphere.coords
+            atmos_hcoord = dict(self.horizontal_coordinates.atmosphere.coords)
         return CoupledCoords(
-            ocean_vertical=self.vertical_coordinate.ocean.coords,
-            ice_vertical=self.vertical_coordinate.ice.coords,
-            atmosphere_vertical=self.vertical_coordinate.atmosphere.coords,
-            ocean_horizontal=dict(self.horizontal_coordinates.ocean.coords),
-            ice_horizontal=dict(self.horizontal_coordinates.ice.coords),
-            atmosphere_horizontal=dict(self.horizontal_coordinates.atmosphere.coords),
+            ocean_vertical=ocean_vcoord,
+            atmosphere_vertical=atmos_vcoord,
+            ocean_horizontal=ocean_hcoord,
+            ice_horizontal=ice_hcoord,
+            atmosphere_horizontal=atmos_hcoord,
         )
 
     def to_device(self) -> "CoupledDatasetProperties":
@@ -447,7 +463,7 @@ class CoupledDataset:
         if self._ocean is not None:
             ocean = self._ocean[idx]
         if self._ice is not None:
-            ice = self._ice[idx]
+            ice = self._ice[fast_idx]
         if self._atmosphere is not None:
             atmosphere = self._atmosphere[fast_idx]
         return CoupledDatasetItem(ocean=ocean, ice=ice, atmosphere=atmosphere)
