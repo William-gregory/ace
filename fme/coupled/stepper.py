@@ -151,18 +151,18 @@ class CoupledOceanFractionConfig:
         return filtered
 
     def build_ocean_data(
-        self, forcings_from_ocean: TensorMapping, atmos_forcing_data: TensorMapping
+        self, forcings_from_ocean: TensorMapping, external_forcing_data: TensorMapping
     ) -> OceanData:
         # compute ocean frac from land frac and ocean-predicted sea ice frac
         land_frac_name = self.land_fraction_name
         sea_ice_frac_name = self.sea_ice_fraction_name
         # fill nans with 0s
         sea_ice_frac = torch.nan_to_num(forcings_from_ocean[sea_ice_frac_name])
-        land_frac = atmos_forcing_data[land_frac_name]
+        land_frac = external_forcing_data[land_frac_name]
         return OceanData({land_frac_name: land_frac, sea_ice_frac_name: sea_ice_frac})
     
     def build_ice_data(
-        self, forcings_from_ice: TensorMapping, atmos_forcing_data: TensorMapping
+        self, forcings_from_ice: TensorMapping, external_forcing_data: TensorMapping
     ) -> IceData:
         # compute ocean frac from land frac and ice-predicted sea ice frac
         land_frac_name = self.land_fraction_name
@@ -170,8 +170,8 @@ class CoupledOceanFractionConfig:
         # fill nans with 0s
         sea_ice_frac = torch.clamp(torch.nan_to_num(
                                 forcings_from_ice[sea_ice_frac_name]),
-                                min=0.0,max=1.0) #is this unnormalized?
-        land_frac = atmos_forcing_data[land_frac_name]
+                                min=0.0,max=1.0)
+        land_frac = external_forcing_data[land_frac_name]
         return IceData({land_frac_name: land_frac, sea_ice_frac_name: sea_ice_frac})
 
 
@@ -293,14 +293,6 @@ class CoupledStepperConfig:
         self._validate_component_configs()
         
         if self.atmosphere is None:  # ice-ocean, with prescribed atmos
-            #ice_ocean_config = self.ice.stepper.get_ocean()
-            #if ice_ocean_config is None:
-            #    raise RuntimeError(
-            #        "ice ocean config is None after validation; "
-            #        "this should not happen"
-            #    )
-            #self._ice_ocean_config = ice_ocean_config
-
             # set timesteps
             self._ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
             self._ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
@@ -326,12 +318,11 @@ class CoupledStepperConfig:
                     self.ice.stepper.output_names
                 )
             )
-        
             self._ocean_to_ice_forcing_names = list(
-                set(self.ice.stepper.input_only_names)
-                .intersection(self.ocean.stepper.output_names)
+                set(self.ice.stepper.input_only_names).intersection(
+                    self.ocean.stepper.output_names
+                )
             )
-
             # calculate names for each component's data requirements
             self._all_ice_names = list(
                 set(self.ice.stepper.all_names).difference(
@@ -342,7 +333,7 @@ class CoupledStepperConfig:
             self._all_ocean_names = list(
                 set(self.ocean.stepper.all_names).difference(self._all_ice_names)
             )
-            
+
         elif self.ice is None:  # atmosphere-ocean (ice may be part of ocean)
             atmosphere_ocean_config = self.atmosphere.stepper.get_ocean()
             if atmosphere_ocean_config is None:
@@ -501,7 +492,7 @@ class CoupledStepperConfig:
                 self._all_atmosphere_names = (
                     self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
                         unfiltered_all_atmosphere_names,
-                        self.ocean_fraction_name,
+                        self.sea_ice_fraction_name,
                     )
                 )
             else:
@@ -566,7 +557,7 @@ class CoupledStepperConfig:
                 self._atmosphere_forcing_exogenous_names = (
                     self.ocean_fraction_prediction.filter_atmosphere_forcing_names(
                         unfiltered_atmosphere_forcing_names,
-                        self._atmosphere_ice_config.ocean_fraction_name,
+                        self._atmosphere_ocean_config.ocean_fraction_name,
                     )
                 )
             else:
@@ -701,35 +692,30 @@ class CoupledStepperConfig:
             return self._atmosphere_ice_config
         else:
             raise AttributeError("Atmosphere-ice coupling not configured")
-    
-    #@property
-    #def ice_ocean_config(self) -> IceConfig:
-    #    """The OceanConfig defined in the ice StepperConfig."""
-    #    if hasattr(self, '_ice_ocean_config'):
-    #        return self._ice_ocean_config
-    #    else:
-    #        raise AttributeError("Ice-ocean coupling not configured")
 
     @property
     def ocean_fraction_name(self) -> str:
-        """Name of the ocean fraction field in the atmosphere data."""
-        has_ocean_config = hasattr(self, '_atmosphere_ocean_config')
-        has_ice_config = hasattr(self, '_atmosphere_ice_config')
-        
-        if has_ocean_config and not has_ice_config:
-            # atmosphere-ocean coupling: use ocean model
+        """Name of the ocean fraction field in the atmosphere or ocean data."""
+        if self.ocean is not None:
             return self._atmosphere_ocean_config.ocean_fraction_name
-        elif has_ice_config:
-            # atmosphere-ice or fully-coupled: use ice model
-            return self._atmosphere_ice_config.ocean_fraction_name
         else:
             raise AttributeError("Ocean fraction name not available")
+        
+    @property
+    def sea_ice_fraction_name(self) -> str:
+        """Name of the sea ice fraction field in the atmosphere or ice data."""
+        if self.ice is not None:
+            return self._atmosphere_ice_config.sea_ice_fraction_name
+        else:
+            raise AttributeError("Sea ice fraction name not available")
 
     @property
     def surface_temperature_name(self) -> str:
         """Name of the surface temperature field in the atmosphere data."""
         if hasattr(self, '_atmosphere_ocean_config'):
             return self._atmosphere_ocean_config.surface_temperature_name
+        elif hasattr(self, '_atmosphere_ice_config'):
+            return self._atmosphere_ice_config.ice_surface_temperature_name
         else:
             raise AttributeError("Surface temperature name not available")
 
@@ -839,12 +825,6 @@ class CoupledStepperConfig:
             raise ValueError("At least two components must be configured for coupling.")
         
         if self.atmosphere is None: #ice-ocean coupling
-            #ice_ocean_config = self.ice.stepper.get_ocean()
-            #if ice_ocean_config is None:
-            #    raise ValueError(
-            #        "The ice stepper 'ocean' config is missing but must be set for "
-            #        "ice-ocean coupled emulation."
-            #    )
             ocean_timestep = pd.Timedelta(self.ocean.timedelta).to_pytimedelta()
             ice_timestep = pd.Timedelta(self.ice.timedelta).to_pytimedelta()
             if ice_timestep > ocean_timestep:
@@ -1032,6 +1012,13 @@ class CoupledStepperConfig:
                     f"next_step_forcing_names: {missing_next_step_forcings}."
                 )
             
+            # ts_name must be present in the ice's output names
+            if self.ts_name not in self.ice.stepper.output_names:
+                raise ValueError(
+                    f"The variable {self.ts_name} is not in the ice's output "
+                    "names but is required for coupling with the atmosphere."
+                )
+            
             # validate ocean_fraction_prediction
             if self.ocean_fraction_prediction is not None:
                 self.ocean_fraction_prediction.validate_ice_prognostic_names(
@@ -1153,6 +1140,12 @@ class CoupledStepperConfig:
             if self.sst_name not in self.ocean.stepper.output_names:
                 raise ValueError(
                     f"The variable {self.sst_name} is not in the ocean's output "
+                    "names but is required for coupling with the atmosphere."
+                )
+            # ts_name must be present in the ice's output names
+            if self.ts_name not in self.ice.stepper.output_names:
+                raise ValueError(
+                    f"The variable {self.ts_name} is not in the ice's output "
                     "names but is required for coupling with the atmosphere."
                 )
             
@@ -1755,6 +1748,39 @@ class CoupledStepper:
     @property
     def _ice_to_ocean_forcing_names(self) -> list[str]:
         return getattr(self._config, 'ice_to_ocean_forcing_names', [])
+    
+    def _prescribe_ic_ts(
+        self,
+        atmos_ic_state: PrognosticState,
+        forcing_ic_batch: BatchData,
+    ) -> PrognosticState:
+        """Prescribe the initial condition TS state on the surface_temperature
+        initial condition field.
+
+        atmos_ic_state: The atmosphere prognostic state to be updated.
+        forcing_ic_state: The corresponding forcing state at the same time,
+            which should be output from _get_atmosphere_forcings.
+
+        """
+        ts_name = self.atmosphere.surface_temperature_name
+        assert np.all(atmos_ic_state.as_batch_data().time == forcing_ic_batch.time)
+        atmos_ic_data = atmos_ic_state.as_batch_data().data
+        forcing_ic_data = forcing_ic_batch.data
+        assert ts_name in atmos_ic_data
+        assert ts_name in forcing_ic_data
+        assert self.atmosphere.sea_ice_fraction_name in forcing_ic_data
+        atmos_ic_data = self.atmosphere.prescribe_ice_ts(
+            mask_data=forcing_ic_data,
+            gen_data=atmos_ic_data,
+            target_data=forcing_ic_data,
+        )
+        return PrognosticState(
+            BatchData(
+                data=atmos_ic_data,
+                time=forcing_ic_batch.time,
+                labels=forcing_ic_batch.labels,
+            )
+        )
 
     def _prescribe_ic_sst(
         self,
@@ -1792,7 +1818,7 @@ class CoupledStepper:
     def _forcings_from_ocean_with_ocean_fraction(
         self,
         forcings_from_ocean: TensorMapping,
-        atmos_forcing_data: TensorMapping,
+        external_forcing_data: TensorMapping,
     ) -> TensorDict:
         """Get the ocean fraction field and return it with the other fields in
         forcings_from_ocean.
@@ -1802,26 +1828,27 @@ class CoupledStepper:
             including the ocean fraction.
 
         """
-        ocean_frac_name = self._config.ocean_fraction_name
         forcings_from_ocean = dict(forcings_from_ocean)
-        if self._config.ocean_fraction_prediction is None:
-            # for convenience, move the atmos's ocean fraction to the
-            # forcings_from_ocean dict
-            forcings_from_ocean[ocean_frac_name] = atmos_forcing_data[ocean_frac_name]
-        else:
-            # compute ocean frac from land frac and ocean-predicted sea ice frac
-            ofrac_config = self._config.ocean_fraction_prediction
-            ocean_data = ofrac_config.build_ocean_data(
-                forcings_from_ocean, atmos_forcing_data
-            )
-            sea_ice_frac_name = (
-                ofrac_config.sea_ice_fraction_name_in_atmosphere
-                or ofrac_config.sea_ice_fraction_name
-            )
-            forcings_from_ocean[sea_ice_frac_name] = ocean_data.sea_ice_fraction
-            forcings_from_ocean[ocean_frac_name] = torch.clip(
-                ocean_data.ocean_fraction, min=0
-            )
+        if self.ice is None:
+            ocean_frac_name = self._config.ocean_fraction_name
+            if self._config.ocean_fraction_prediction is None:
+                # for convenience, move the atmos's ocean fraction to the
+                # forcings_from_ocean dict
+                forcings_from_ocean[ocean_frac_name] = external_forcing_data[ocean_frac_name]
+            else:
+                # compute ocean frac from land frac and ocean-predicted sea ice frac
+                ofrac_config = self._config.ocean_fraction_prediction
+                ocean_data = ofrac_config.build_ocean_data(
+                    forcings_from_ocean, external_forcing_data
+                )
+                sea_ice_frac_name = (
+                    ofrac_config.sea_ice_fraction_name_in_atmosphere
+                    or ofrac_config.sea_ice_fraction_name
+                )
+                forcings_from_ocean[sea_ice_frac_name] = ocean_data.sea_ice_fraction
+                forcings_from_ocean[ocean_frac_name] = torch.clip(
+                    ocean_data.ocean_fraction, min=0
+                )
         for name, tensor in forcings_from_ocean.items():
             # set ocean invalid points to 0 based on the ocean masking
             mask = self._ocean_mask_provider.get_mask_tensor_for(name)
@@ -1833,7 +1860,7 @@ class CoupledStepper:
     def _forcings_from_ice_with_ocean_fraction(
         self,
         forcings_from_ice: TensorMapping,
-        atmos_forcing_data: TensorMapping,
+        external_forcing_data: TensorMapping,
     ) -> TensorDict:
         """Get the ocean fraction field and return it with the other fields in
         forcings_from_ice.
@@ -1843,26 +1870,26 @@ class CoupledStepper:
             including the ocean fraction.
 
         """
-        ocean_frac_name = self._config.ocean_fraction_name
         forcings_from_ice = dict(forcings_from_ice)
-        if self._config.ocean_fraction_prediction is None:
-            # for convenience, move the atmos's ocean fraction to the
-            # forcings_from_ice dict
-            forcings_from_ice[ocean_frac_name] = atmos_forcing_data[ocean_frac_name]
-        else:
-            # compute ocean frac from land frac and ice-predicted sea ice frac
-            ofrac_config = self._config.ocean_fraction_prediction
-            ocean_data = ofrac_config.build_ice_data(
-                forcings_from_ice, atmos_forcing_data
-            )
-            sea_ice_frac_name = (
-                ofrac_config.sea_ice_fraction_name_in_atmosphere
-                or ofrac_config.sea_ice_fraction_name
-            )
-            forcings_from_ice[sea_ice_frac_name] = ocean_data.sea_ice_fraction
-            forcings_from_ice[ocean_frac_name] = torch.clip(
-                ocean_data.ocean_fraction, min=0
-            )
+        if self.atmosphere is not None:
+            ice_frac_name = self._config.sea_ice_fraction_name
+            if self._config.ocean_fraction_prediction is None:
+                # for convenience, move the atmos's ocean fraction to the
+                # forcings_from_ice dict
+                forcings_from_ice[ice_frac_name] = external_forcing_data[ice_frac_name]
+            else:
+                ifrac_config = self._config.ice_fraction_prediction
+                ice_data = ifrac_config.build_ice_data(
+                    forcings_from_ice, external_forcing_data
+                )
+                sea_ice_frac_name = (
+                    ifrac_config.sea_ice_fraction_name_in_atmosphere
+                    or ifrac_config.sea_ice_fraction_name
+                )
+                forcings_from_ice[sea_ice_frac_name] = ice_data.sea_ice_fraction
+                forcings_from_ice[ice_frac_name] = torch.clip(
+                    ice_data.ice_fraction, min=0
+                )
         for name, tensor in forcings_from_ice.items():
             # set ocean invalid points to 0 based on the ocean masking
             mask = self._ocean_mask_provider.get_mask_tensor_for(name)
@@ -1884,7 +1911,7 @@ class CoupledStepper:
             atmos_data: Atmosphere batch data, including initial condition and forward
                 steps.
             ocean_ic: Ocean initial condition state, including SST.
-            ice_ic: Ice initial condition state, including ice fraction.
+            ice_ic: Ice initial condition state, including TS.
         """
         time_dim = self.atmosphere.TIME_DIM
         sizes = [-1] * len(next(iter(atmos_data.values())).shape)
@@ -1893,33 +1920,121 @@ class CoupledStepper:
         forcing_data = {
             k: atmos_data[k] for k in self._atmosphere_forcing_exogenous_names
         }
-        # forcings from ocean are constant during the fast atmosphere steps
-        # NOTE: only n_ic_timesteps = 1 is currently supported
-        assert next(iter(ocean_ic.values())).shape[self.ocean.TIME_DIM] == 1
-        forcings_from_ocean = {
-            k: ocean_ic[k].expand(*sizes)
-            for k in self._ocean_to_atmosphere_forcing_names
-        }
-        # rename the ocean surface temperature variable using the corresponding
-        # name in the atmosphere
-        forcings_from_ocean[self._config.surface_temperature_name] = (
-            forcings_from_ocean.pop(self._config.sst_name)
-        )
-        # get the SST mask (0 if land, 1 if sea surface)
-        if ice_ic is None:
+        if ocean_ic is not None:
+            # forcings from ocean are constant during the fast atmosphere steps
+            # NOTE: only n_ic_timesteps = 1 is currently supported
+            assert next(iter(ocean_ic.values())).shape[self.ocean.TIME_DIM] == 1
+            forcings_from_ocean = {
+                k: ocean_ic[k].expand(*sizes)
+                for k in self._ocean_to_atmosphere_forcing_names
+            }
+            # rename the ocean surface temperature variable using the corresponding
+            # name in the atmosphere
+            forcings_from_ocean[self._config.surface_temperature_name] = (
+                forcings_from_ocean.pop(self._config.sst_name)
+            )
+            # get the SST mask (0 if land, 1 if sea surface)
             forcings_from_ocean = self._forcings_from_ocean_with_ocean_fraction(
                 forcings_from_ocean, forcing_data
             )
-        # update atmosphere forcings
-        forcing_data.update(forcings_from_ocean)
+            # update atmosphere forcings
+            forcing_data.update(forcings_from_ocean)
         if ice_ic is not None:
+            # NOTE: only n_ic_timesteps = 1 is currently supported
+            assert next(iter(ice_ic.values())).shape[self.ice.TIME_DIM] == 1
             forcings_from_ice = {
                 k: ice_ic[k].expand(*sizes)
                 for k in self._ice_to_atmosphere_forcing_names
             }
+            # rename the ice surface temperature variable using the corresponding
+            # name in the atmosphere
             forcings_from_ice[self._config.surface_temperature_name] = (
-                forcings_from_ice.pop(self._config.ice_surface_temperature_name)
+                forcings_from_ice.pop(self._config.ts_name)
             )
+            # get the TS mask (0 if land, 1 if sea surface)
+            forcings_from_ice = self._forcings_from_ice_with_ocean_fraction(
+                forcings_from_ice, forcing_data
+            )
+            # update atmosphere forcings
+            forcing_data.update(forcings_from_ice)
+        return forcing_data
+
+    def _get_ocean_forcings(
+        self,
+        ocean_data: TensorMapping,
+        atmos_gen: TensorMapping | None = None,
+        atmos_forcings: TensorMapping | None = None,
+        ice_gen: TensorMapping | None = None,
+        ice_forcings: TensorMapping | None = None
+    ) -> TensorDict:
+        """
+        Get the forcings for the ocean component.
+
+        Args:
+            ocean_data: Ocean data, including initial condition and forward
+                steps.
+            atmos_gen: Generated atmosphere data covering the ocean forward steps.
+            atmos_forcings: Atmosphere forcing data covering the ocean forward steps.
+            ice_gen: Generated ice data covering the ocean forward steps.
+            ice_forcings: Ice forcing data covering the ocean forward steps.
+        """
+        time_dim = self.ocean.TIME_DIM
+        # NOTE: only n_ic_timesteps = 1 is currently supported
+        assert (
+            next(iter(ocean_data.values())).shape[time_dim] == self.n_ic_timesteps + 1
+        )
+        # get n_ic_timesteps of ocean exogenous forcings
+        forcing_data = {
+            k: ocean_data[k]
+            for k in set(self._ocean_forcing_exogenous_names).difference(
+                self._shared_forcing_exogenous_names
+            )
+        }
+        if atmos_gen is not None:
+            # get time-averaged forcings from atmosphere
+            forcings_from_atmosphere = {
+                **{
+                    k: atmos_gen[k].mean(time_dim, keepdim=True)
+                    for k in self._atmosphere_to_ocean_forcing_names
+                },
+                **{
+                    k: atmos_forcings[k].mean(time_dim, keepdim=True)
+                    for k in self._shared_forcing_exogenous_names
+                },
+            }
+            # append or prepend nans depending on whether or not the forcing is a
+            # "next step" forcing
+            forcings_from_atmosphere = {
+                k: (
+                    torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
+                    if k in self._config.ocean_next_step_forcing_names
+                    else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
+                )
+                for k, v in forcings_from_atmosphere.items()
+            }
+            forcing_data.update(forcings_from_atmosphere)
+        if ice_gen is not None:
+            # get time-averaged forcings from ice
+            forcings_from_ice = {
+                **{
+                    k: ice_gen[k].mean(time_dim, keepdim=True)
+                    for k in self._ice_to_ocean_forcing_names
+                },
+                **{
+                    k: ice_forcings[k].mean(time_dim, keepdim=True)
+                    for k in self._shared_forcing_exogenous_names
+                },
+            }
+            # append or prepend nans depending on whether or not the forcing is a
+            # "next step" forcing
+            forcings_from_ice = {
+                k: (
+                    torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
+                    if k in self._config.ocean_next_step_forcing_names
+                    else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
+                )
+                for k, v in forcings_from_ice.items()
+            }
             forcings_from_ice = self._forcings_from_ice_with_ocean_fraction(
                 forcings_from_ice, forcing_data
             )
@@ -1948,99 +2063,30 @@ class CoupledStepper:
         forcing_data = {
             k: ice_data[k] for k in self._ice_forcing_exogenous_names
         }
-        # forcings from ocean are constant during the fast atmosphere steps
-        # NOTE: only n_ic_timesteps = 1 is currently supported
-        assert next(iter(ocean_ic.values())).shape[self.ocean.TIME_DIM] == 1
-        forcings_from_ocean = {
-            k: ocean_ic[k].expand(*sizes)
-            for k in self._ocean_to_ice_forcing_names
-        }
-        
-        # update ice forcings
-        forcing_data.update(forcings_from_ocean)
-        if atmos_ic is not None:
-            forcings_from_atmosphere = {
-                k: atmos_ic[k].expand(*sizes)
-                for k in self._atmosphere_to_ice_forcing_names
+        if ocean_ic is not None:
+                # forcings from ocean are constant during the fast ice steps
+            # NOTE: only n_ic_timesteps = 1 is currently supported
+            assert next(iter(ocean_ic.values())).shape[self.ocean.TIME_DIM] == 1
+            forcings_from_ocean = {
+                k: ocean_ic[k].expand(*sizes)
+                for k in self._ocean_to_ice_forcing_names
             }
-            forcing_data.update(forcings_from_atmosphere)
-        return forcing_data
-
-    def _get_ocean_forcings(
-        self,
-        ocean_data: TensorMapping,
-        atmos_gen: TensorMapping | None = None,
-        atmos_forcings: TensorMapping | None = None,
-        ice_gen: TensorMapping | None = None,
-        ice_forcings: TensorMapping | None = None,
-    ) -> TensorDict:
-        """
-        Get the forcings for the ocean component.
-
-        Args:
-            ocean_data: Ocean data, including initial condition and forward
-                steps.
-            atmos_gen: Generated atmosphere data covering the ocean forward steps.
-            atmos_forcings: Atmosphere forcing data covering the ocean forward steps.
-        """
-        time_dim = self.ocean.TIME_DIM
-        # NOTE: only n_ic_timesteps = 1 is currently supported
-        assert (
-            next(iter(ocean_data.values())).shape[time_dim] == self.n_ic_timesteps + 1
-        )
-        # get n_ic_timesteps of ocean exogenous forcings
-        forcing_data = {
-            k: ocean_data[k]
-            for k in set(self._ocean_forcing_exogenous_names).difference(
-                self._shared_forcing_exogenous_names
+            # get the SST mask (0 if land, 1 if sea surface)
+            forcings_from_ocean = self._forcings_from_ocean_with_ocean_fraction(
+                forcings_from_ocean, forcing_data
             )
-        }
-        # get time-averaged forcings from atmosphere
-        if atmos_gen is not None:
-            forcings_from_atmosphere = {
-                **{
-                    k: atmos_gen[k].mean(time_dim, keepdim=True)
-                    for k in self._atmosphere_to_ocean_forcing_names
-                },
-                **{
-                    k: atmos_forcings[k].mean(time_dim, keepdim=True)
-                    for k in self._shared_forcing_exogenous_names
-                },
-            }
-            # append or prepend nans depending on whether or not the forcing is a
-            # "next step" forcing
+            # update ice forcings
+            forcing_data.update(forcings_from_ocean)
+        if atmos_ic is not None:
             forcings_from_atmosphere = {
                 k: (
                     torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
-                    if k in self._config.ocean_next_step_forcing_names
+                    if k in self._config.ice_next_step_forcing_names
                     else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
                 )
                 for k, v in forcings_from_atmosphere.items()
             }
             forcing_data.update(forcings_from_atmosphere)
-        if ice_gen is not None:
-            forcings_from_ice = {
-                **{
-                    k: ice_gen[k].mean(time_dim, keepdim=True)
-                    for k in self._ice_to_ocean_forcing_names
-                },
-                **{
-                    k: ice_forcings[k].mean(time_dim, keepdim=True)
-                    for k in self._shared_forcing_exogenous_names
-                },
-            }
-            # append or prepend nans depending on whether or not the forcing is a
-            # "next step" forcing
-            forcings_from_ice = {
-                k: (
-                    torch.cat([torch.full_like(v, fill_value=np.nan), v], dim=time_dim)
-                    if k in self._config.ocean_next_step_forcing_names
-                    else torch.cat([v, torch.full_like(v, fill_value=np.nan)], dim=time_dim)
-                )
-                for k, v in forcings_from_ice.items()
-            }
-            forcing_data.update(forcings_from_ice)
-
         return forcing_data
 
     def get_prediction_generator(
@@ -2438,8 +2484,8 @@ class CoupledStepper:
                 time=atmos_window.time,
                 labels=atmos_window.labels,
             )
-            # prescribe the initial condition SST state
-            atmos_ic_state = self._prescribe_ic_sst(
+            # prescribe the initial condition TS state  
+            atmos_ic_state = self._prescribe_ic_ts(
                 atmos_ic_state,
                 atmos_forcings.select_time_slice(
                     slice(None, self.atmosphere.n_ic_timesteps)
@@ -2590,8 +2636,16 @@ class CoupledStepper:
                 time=atmos_window.time,
                 labels=atmos_window.labels,
             )
-            # prescribe the initial condition SST state
+            # prescribe the initial condition surface temperatures (SST and TS)
+            # First prescribe SST from ocean
             atmos_ic_state = self._prescribe_ic_sst(
+                atmos_ic_state,
+                atmos_forcings.select_time_slice(
+                    slice(None, self.atmosphere.n_ic_timesteps)
+                ),
+            )
+            # Then prescribe TS from ice
+            atmos_ic_state = self._prescribe_ic_ts(
                 atmos_ic_state,
                 atmos_forcings.select_time_slice(
                     slice(None, self.atmosphere.n_ic_timesteps)

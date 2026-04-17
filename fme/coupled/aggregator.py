@@ -598,8 +598,8 @@ class InferenceEvaluatorAggregator(
                     if output_dir is not None
                     else None
                 ),
-                #log_nino34_index=False,
-                #log_enso_coeff=False,
+                log_nino34_index=False,
+                log_enso_coeff=False,
             )
         if n_timesteps_ice is not None:
             self._record_ice_step_20 = n_timesteps_ice >= 20
@@ -660,6 +660,7 @@ class InferenceEvaluatorAggregator(
                     else None
                 ),
                 log_nino34_index=False,
+                log_enso_coeff=False,
             )
 
         self._num_channels_ocean: int | None = None

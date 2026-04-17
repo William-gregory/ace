@@ -1,4 +1,4 @@
-experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_FloeNet-SamudraI_coupled_seed711_2GPU
+experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_FloeNet-SamudraI_coupled_bothGraphNN_seed711_2GPU
 save_checkpoint: true
 save_best_inference_epoch_checkpoints: false
 checkpoint_every_n_batches: 100
@@ -96,7 +96,7 @@ optimization:
 stepper_training:
   ocean:
     parameter_init:
-      weights_path: /scratch/cimes/wg4031/fme/train/OM4_SamudraI_big_IceForce_NOcorr_5dsnaps_seed711_2GPU/training_checkpoints/best_inference_ckpt.tar
+      weights_path: /scratch/cimes/wg4031/fme/train/OM4_SamudraI_GraphNN_IceForce_5dsnaps_seed711_2GPU/training_checkpoints/best_inference_ckpt.tar
     loss:
       type: MSE
   ice:
@@ -137,24 +137,18 @@ stepper:
         type: single_module
         config:
           builder:
-            type: Samudra
+            type: FloeNet
             config:
-              ch_width:
-              - 280
-              - 380
-              - 480
-              - 520
-              dilation:
-              - 1
-              - 2
-              - 4
-              - 8
-              n_layers:
-              - 1
-              - 1
-              - 1
-              - 1
-              norm: instance
+              latent_dimension: 512
+              activation: SiLU
+              meshes: 6
+              M0: 4
+              bias: true
+              radius_fraction: 1
+              layernorm: true
+              processor_steps: 4
+              residual: true
+              is_ocean: true
           normalization:
             network:
               global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_snapshots_mu.nc
@@ -185,8 +179,8 @@ stepper:
               - so_16
               - so_17
               - so_18
-              #surface_energy_flux_correction:
-              #  method: prescribed
+              surface_energy_flux_correction:
+                method: prescribed
           next_step_forcing_names:
           - LWDN
           - LWUP

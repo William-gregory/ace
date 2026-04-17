@@ -333,21 +333,19 @@ class SingleModuleStep(StepABC):
         if self._config.ocean is not None:
             return self._config.ocean.surface_temperature_name
         return None
-    
-    @property
-    def ice_surface_temperature_name(self) -> str | None:
-        if self._config.ice is not None:
-            return self._config.ice.ice_surface_temperature_name
-        return None
 
     @property
     def ocean_fraction_name(self) -> str | None:
-        if self._config.ice is not None:
-            return self._config.ice.ocean_fraction_name
-        elif (self._config.ice is None) & (self._config.ocean is not None):
+        if self._config.ocean is not None:
             return self._config.ocean.ocean_fraction_name
         return None
-
+    
+    @property
+    def sea_ice_fraction_name(self) -> str | None:
+        if self._config.ice is not None:
+            return self._config.ice.sea_ice_fraction_name
+        return None
+    
     def prescribe_sst(
         self,
         mask_data: TensorMapping,
@@ -360,6 +358,19 @@ class SingleModuleStep(StepABC):
                 "sea surface temperature."
             )
         return self.ocean.prescriber(mask_data, gen_data, target_data)
+    
+    def prescribe_ice_ts(
+        self,
+        mask_data: TensorMapping,
+        gen_data: TensorMapping,
+        target_data: TensorMapping,
+    ) -> TensorDict:
+        if self.ice is None:
+            raise RuntimeError(
+                "The Ice interface is missing but required to prescribe "
+                "ice surface temperature."
+            )
+        return self.ice.prescriber(mask_data, gen_data, target_data)
 
     @property
     def modules(self) -> nn.ModuleList:

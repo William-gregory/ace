@@ -78,14 +78,14 @@ class IceData:
         raise KeyError(name)
 
     @property
-    def sea_surface_fraction(self) -> torch.Tensor:
-        """Returns the sea surface fraction."""
-        return self._get("sea_surface_fraction")
-
-    @property
     def land_fraction(self) -> torch.Tensor:
         """Returns the land fraction."""
         return self._get("land_fraction")
+    
+    @property
+    def sea_surface_fraction(self) -> torch.Tensor:
+        """Returns the sea surface fraction."""
+        return 1 - self.land_fraction
 
     @property
     def ocean_fraction(self) -> torch.Tensor:

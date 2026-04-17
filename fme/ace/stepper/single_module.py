@@ -873,6 +873,10 @@ class Stepper:
     @property
     def ocean_fraction_name(self) -> str | None:
         return self._step_obj.ocean_fraction_name
+    
+    @property
+    def sea_ice_fraction_name(self) -> str | None:
+        return self._step_obj.sea_ice_fraction_name
 
     def prescribe_sst(
         self,
@@ -890,6 +894,23 @@ class Stepper:
                 be prescribed onto the generated one according to the mask.
         """
         return self._step_obj.prescribe_sst(mask_data, gen_data, target_data)
+    
+    def prescribe_ice_ts(
+        self,
+        mask_data: TensorMapping,
+        gen_data: TensorMapping,
+        target_data: TensorMapping,
+    ) -> TensorDict:
+        """
+        Prescribe ice surface temperature onto the generated surface temperature field.
+
+        Args:
+            mask_data: Source for the prescriber mask field.
+            gen_data: Contains the generated surface temperature field.
+            target_data: Contains the target surface temperature that will
+                be prescribed onto the generated one according to the mask.
+        """
+        return self._step_obj.prescribe_ice_ts(mask_data, gen_data, target_data)
 
     @property
     def training_dataset_info(self) -> DatasetInfo:
@@ -1770,6 +1791,8 @@ class StepperOverrideConfig:
     Parameters:
         ocean: Ocean configuration to override that used in producing a serialized
             stepper.
+        ice: Ice configuration to override that used in producing a serialized
+            stepper.
         multi_call: MultiCall configuration to override that used in producing a
             serialized stepper.
         derived_forcings: Derived forcings configuration to override that used in
@@ -1779,6 +1802,7 @@ class StepperOverrideConfig:
     """
 
     ocean: Literal["keep"] | OceanConfig | None = "keep"
+    ice: Literal["keep"] | IceConfig | None = "keep"
     multi_call: Literal["keep"] | MultiCallConfig | None = "keep"
     derived_forcings: Literal["keep"] | DerivedForcingsConfig = "keep"
     prescribed_prognostic_names: Literal["keep"] | list[str] = "keep"
@@ -1829,6 +1853,12 @@ def load_stepper(
             "Overriding training ocean configuration with a new ocean configuration."
         )
         stepper.replace_ocean(override_config.ocean)
+
+    if override_config.ice != "keep":
+        logging.info(
+            "Overriding training ice configuration with a new ice configuration."
+        )
+        stepper.replace_ice(override_config.ice)
 
     if override_config.multi_call != "keep":
         logging.info(
