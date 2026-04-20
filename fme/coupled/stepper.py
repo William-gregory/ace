@@ -1394,7 +1394,14 @@ class CoupledStepperConfig:
             del state_copy["sst_mask_name"]
         if "parameter_init" in state_copy:
             del state_copy["parameter_init"]
-        for component_key in ["ocean", "ice", "atmosphere"]:
+        components = []
+        if state_copy["ocean"] is not None:
+            components.append("ocean")
+        if state_copy["ice"] is not None:
+            components.append("ice")
+        if state_copy["atmosphere"] is not None:
+            components.append("atmosphere")
+        for component_key in components:
             if "loss_contributions" in state_copy[component_key]:
                 del state_copy[component_key]["loss_contributions"]
         return state_copy
@@ -1638,6 +1645,7 @@ class CoupledStepper:
         self._config = config
         self._dataset_info = dataset_info
         self._ocean_mask_provider = dataset_info.ocean_mask_provider
+        self._ice_mask_provider = dataset_info.ice_mask_provider
         _: PredictFunction[  # for type checking
             CoupledPrognosticState,
             CoupledBatchData,
@@ -1678,7 +1686,7 @@ class CoupledStepper:
         """
         state = {
             "config": self._config.get_state(),
-            "dataset_info": self._dataset_info.to_state(),
+            "dataset_info": self._dataset_info.get_state(),
         }
         if self.atmosphere is not None:
             state["atmosphere_state"] = self.atmosphere.get_state()
@@ -1891,8 +1899,8 @@ class CoupledStepper:
                     ice_data.ice_fraction, min=0
                 )
         for name, tensor in forcings_from_ice.items():
-            # set ocean invalid points to 0 based on the ocean masking
-            mask = self._ocean_mask_provider.get_mask_tensor_for(name)
+            # set ice invalid points to 0 based on the ice masking
+            mask = self._ice_mask_provider.get_mask_tensor_for(name)
             if mask is not None:
                 mask = mask.expand(tensor.shape)
                 forcings_from_ice[name] = tensor.where(mask != 0, 0)

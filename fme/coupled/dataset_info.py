@@ -25,10 +25,23 @@ class CoupledDatasetInfo:
 
     @property
     def ocean_mask_provider(self) -> HasGetMaskTensorFor:
-        try:
-            return self.ocean.mask_provider
-        except MissingDatasetInfo as err:
-            raise MissingCoupledDatasetInfo("ocean_mask_provider") from err
+        if self.ocean is not None:
+            try:
+                return self.ocean.mask_provider
+            except MissingDatasetInfo as err:
+                raise MissingCoupledDatasetInfo("ocean_mask_provider") from err
+        else:
+            return None
+        
+    @property
+    def ice_mask_provider(self) -> HasGetMaskTensorFor:
+        if self.ice is not None:
+            try:
+                return self.ice.mask_provider
+            except MissingDatasetInfo as err:
+                raise MissingCoupledDatasetInfo("ice_mask_provider") from err
+        else:
+            return None
 
     def __eq__(self, other):
         if not isinstance(other, CoupledDatasetInfo):
@@ -90,10 +103,19 @@ class CoupledDatasetInfo:
     def from_state(
         cls, state: dict[Literal["ocean", "ice", "atmosphere"], dict[str, Any]]
     ) -> "CoupledDatasetInfo":
+        ocean_state = None
+        ice_state = None
+        atmosphere_state = None
+        if "ocean" in state:
+            ocean_state = DatasetInfo.from_state(state["ocean"])
+        if "ice" in state:
+            ice_state = DatasetInfo.from_state(state["ice"])
+        if "atmosphere" in state:
+            atmosphere_state = DatasetInfo.from_state(state["atmosphere"])
         return cls(
-            ocean=DatasetInfo.from_state(state["ocean"]),
-            ice=DatasetInfo.from_state(state["ice"]),
-            atmosphere=DatasetInfo.from_state(state["atmosphere"]),
+            ocean=ocean_state,
+            ice=ice_state,
+            atmosphere=atmosphere_state,
         )
 
     def update_variable_metadata(

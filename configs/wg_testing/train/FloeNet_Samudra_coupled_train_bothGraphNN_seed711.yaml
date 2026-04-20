@@ -9,8 +9,7 @@ validate_using_ema: true
 evaluate_before_training: true
 ema:
   decay: 0.999
-max_epochs: 1
-n_coupled_steps: 8
+max_epochs: 5
 inference:
   n_coupled_steps: 365
   coupled_steps_in_memory: 40
@@ -27,6 +26,9 @@ inference:
         data_path: /scratch/cimes/wg4031/Emulator_data/Ice/
         file_pattern: 1958-2022.OM41deg_FloeNet_6hourly_NoLeap_trimvars.zarr
         engine: zarr
+        fill_nans:
+          method: "constant"
+          value: 0.0
     start_indices:
       times:
       - '2006-01-03T12:00:00'
@@ -63,6 +65,9 @@ train_loader:
       subset:
         start_time: '1969-01-03T12:00:00'
         stop_time: '2005-12-27T12:00:00'
+      fill_nans:
+          method: "constant"
+          value: 0.0
 validation_loader:
   batch_size: 4
   num_data_workers: 2
@@ -85,6 +90,9 @@ validation_loader:
       subset:
         start_time: '2016-01-03T12:00:00'
         stop_time: '2022-12-27T12:00:00'
+      fill_nans:
+          method: "constant"
+          value: 0.0
 optimization:
   enable_automatic_mixed_precision: false
   lr: 0.0001
@@ -94,6 +102,7 @@ optimization:
     weight_decay: 0.01
   use_gradient_accumulation: true
 stepper_training:
+  n_coupled_steps: 8
   ocean:
     parameter_init:
       weights_path: /scratch/cimes/wg4031/fme/train/OM4_SamudraI_GraphNN_IceForce_5dsnaps_seed711_2GPU/training_checkpoints/best_inference_ckpt.tar
@@ -133,6 +142,9 @@ stepper:
   ocean:
     timedelta: 5D
     stepper:
+      input_masking:
+        mask_value: 0
+        fill_value: 0.0
       step:
         type: single_module
         config:
@@ -391,6 +403,9 @@ stepper:
   ice:
     timedelta: 6h
     stepper:
+      input_masking:
+        mask_value: 0
+        fill_value: 0.0
       step:
         type: single_module
         config:
