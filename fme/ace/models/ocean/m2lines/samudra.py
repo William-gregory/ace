@@ -6,8 +6,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from fme.ace.models.ocean.m2lines.layers import BilinearUpsample, ConvNeXtBlock, MaskAwareInputBlock
-from fme.ace.models.ocean.m2lines.utils import pairwise, MaskedAvgPool2d
+from fme.ace.models.ocean.m2lines.layers import (
+    AvgPool,
+    BilinearUpsample,
+    ConvNeXtBlock,
+    MaskAwareInputBlock,
+    MaskedAvgPool2d,
+)
+from fme.ace.models.ocean.m2lines.utils import pairwise
 from fme.core.dataset_info import DatasetInfo
 
 
@@ -34,6 +40,8 @@ class Samudra(torch.nn.Module):
         Normalization to use in the network, by default "instance"
         Options are "batch", "layer", "instance", or None
         "layer" normalization normalizes over only the channel dimensions
+    partial_convolutions : bool
+        Whether to use partial convolutions and masking, by default False
 
     Example:
     --------
@@ -66,6 +74,7 @@ class Samudra(torch.nn.Module):
         norm_kwargs: Mapping[str, Any] | None = None,
         upscale_factor: int = 4,
         checkpoint_strategy: Literal["all", "simple"] | None = None,
+        partial_convolutions: bool = False,
     ):
         super().__init__()
 
@@ -83,56 +92,70 @@ class Samudra(torch.nn.Module):
         self.N_pad = int((self.last_kernel_size - 1) / 2)
         self.upscale_factor = upscale_factor
         self.checkpoint_strategy = checkpoint_strategy
+        self.partial_convolutions = partial_convolutions
 
         ch_width_with_input = (self.input_channels, *self.ch_width)
 
-        # Build per-channel mask [1, C, H, W] and 2D ocean column mask [1, 1, H, W].
-        # When dataset_info / in_names are not provided (e.g. in unit tests) we fall
-        # back to all-ones, which disables masking without changing the forward logic.
-        if dataset_info is not None:
-            spatial_mask_provider = dataset_info.spatial_mask_provider
-            img_shape = dataset_info.img_shape  # (H, W)
+        Conv0: type[MaskAwareInputBlock] | type[ConvNeXtBlock]
+        Pool: type[MaskedAvgPool2d] | type[AvgPool]
+        if self.partial_convolutions:
+            Conv0 = MaskAwareInputBlock
+            Pool = MaskedAvgPool2d
+            # Build per-channel mask [1, C, H, W] and 2D ocean column mask [1, 1, H, W].
+            # When dataset_info / in_names are not provided (e.g. in unit tests) we fall
+            # back to all-ones, which disables masking without changing forward.
+            if dataset_info is not None:
+                spatial_mask_provider = dataset_info.spatial_mask_provider
+                img_shape = dataset_info.img_shape  # (H, W)
 
-            if in_names is not None:
-                per_channel_masks = []
-                for name in in_names:
-                    m = spatial_mask_provider.get_mask_tensor_for(name)
-                    if m is None:
-                        m = torch.ones(img_shape)
-                    per_channel_masks.append(m)
-                channel_mask = torch.stack(per_channel_masks, dim=0).unsqueeze(0)
+                if in_names is not None:
+                    per_channel_masks = []
+                    for name in in_names:
+                        m = spatial_mask_provider.get_mask_tensor_for(name)
+                        if m is None:
+                            m = torch.ones(img_shape)
+                        per_channel_masks.append(m)
+                    channel_mask = torch.stack(per_channel_masks, dim=0).unsqueeze(0)
+                else:
+                    channel_mask = torch.ones(1, input_channels, *img_shape)
+
+                ocean_col = spatial_mask_provider.get_mask_tensor_for("mask_2d")
+                if ocean_col is None:
+                    ocean_col = torch.ones(img_shape)
+                ocean_column_mask = ocean_col.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
             else:
-                channel_mask = torch.ones(1, input_channels, *img_shape)
+                # No spatial information available — masks are constructed lazily in
+                # forward() from the first input tensor's shape.
+                channel_mask = None
+                ocean_column_mask = None
 
-            ocean_col = spatial_mask_provider.get_mask_tensor_for("mask_2d")
-            if ocean_col is None:
-                ocean_col = torch.ones(img_shape)
-            ocean_column_mask = ocean_col.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+            # Buffers may be None when dataset_info is absent; forward handles this.
+            if channel_mask is not None:
+                self.register_buffer("channel_mask", channel_mask)
+            else:
+                self.channel_mask: torch.Tensor | None = None  # type: ignore[assignment]
+            if ocean_column_mask is not None:
+                self.register_buffer("ocean_column_mask", ocean_column_mask)
+            else:
+                self.ocean_column_mask: torch.Tensor | None = None  # type: ignore[assignment]
         else:
-            # No spatial information available — masks are constructed lazily in
-            # forward() from the first input tensor's shape.
-            channel_mask = None
-            ocean_column_mask = None
-
-        # Buffers may be None when dataset_info is absent; forward handles this.
-        if channel_mask is not None:
-            self.register_buffer("channel_mask", channel_mask)
-        else:
-            self.channel_mask: torch.Tensor | None = None  # type: ignore[assignment]
-        if ocean_column_mask is not None:
-            self.register_buffer("ocean_column_mask", ocean_column_mask)
-        else:
-            self.ocean_column_mask: torch.Tensor | None = None  # type: ignore[assignment]
+            Conv0 = ConvNeXtBlock
+            Pool = AvgPool
         # going down
         layers = []
         for i, (a, b) in enumerate(pairwise(ch_width_with_input)):
             if i == 0:
                 layers.append(
-                    MaskAwareInputBlock(
-                        in_channels=a,
-                        out_channels=b,
-                        dilation=1,
+                    Conv0(
+                        a,
+                        b,
+                        dilation=self.dilation[i],
+                        n_layers=self.n_layers[i],
+                        pad=self.pad,
+                        norm=self.norm,
+                        norm_kwargs=self.norm_kwargs,
                         upscale_factor=self.upscale_factor,
+                        checkpoint_strategy=self.checkpoint_strategy,
                     )
                 )
             else:
@@ -149,7 +172,7 @@ class Samudra(torch.nn.Module):
                         checkpoint_strategy=self.checkpoint_strategy,
                     )
                 )
-            layers.append(MaskedAvgPool2d())
+            layers.append(Pool())
         layers.append(
             ConvNeXtBlock(
                 b,
@@ -213,17 +236,17 @@ class Samudra(torch.nn.Module):
         return channel_mask, ocean_column_mask
 
     def forward(self, fts):
-        # Resolve masks — use registered buffers when available, otherwise fall back
-        # to all-ones (no masking) tensors derived from the input shape.
-        if self.channel_mask is not None:
-            channel_mask = self.channel_mask
-            current_mask = self.ocean_column_mask  # [1, 1, H, W]
-        else:
-            channel_mask, current_mask = self._get_fallback_masks(fts)
+        if self.partial_convolutions:
+            # Resolve masks — use registered buffers when available, otherwise fall back
+            # to all-ones (no masking) tensors derived from the input shape.
+            if self.channel_mask is not None:
+                channel_mask = self.channel_mask
+                current_mask = self.ocean_column_mask  # [1, 1, H, W]
+            else:
+                channel_mask, current_mask = self._get_fallback_masks(fts)
 
         temp: list[torch.Tensor] = []
         count = 0
-
         for layer in self.layers:
             if isinstance(layer, MaskAwareInputBlock):
                 fts = layer(
@@ -242,6 +265,9 @@ class Samudra(torch.nn.Module):
                 # The returned output_mask is [1, 1, H/2, W/2] — ready for the
                 # next pooling stage without any reshaping.
                 fts, current_mask = layer(fts, current_mask)
+
+            elif isinstance(layer, AvgPool):
+                fts = layer(fts)
 
             elif isinstance(layer, BilinearUpsample):
                 if self.checkpoint_strategy == "all":

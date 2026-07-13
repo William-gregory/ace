@@ -2425,7 +2425,7 @@ class CoupledStepper:
              # predict and yield ice steps
             for i_inner in range(self.n_inner_steps):
                 ice_step_num = i_outer * self.n_inner_steps + i_inner
-                ice_step, _ = next(ice_generator)
+                ice_step = next(ice_generator).output
                 yield ComponentStepPrediction(
                     realm="ice",
                     data=ice_step,
@@ -2456,7 +2456,7 @@ class CoupledStepper:
                 labels=ocean_window.labels,
             )
             # predict and yield a single ocean step
-            ocean_step, _ = next(
+            ocean_step = next(
                 iter(
                     self.ocean.get_prediction_generator(
                         ocean_ic_state,
@@ -2465,7 +2465,7 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            )
+            ).output
             yield ComponentStepPrediction(
                 realm="ocean",
                 data=ocean_step,
@@ -2563,7 +2563,7 @@ class CoupledStepper:
             # predict and yield atmosphere steps
             for i_inner in range(self.n_inner_steps):
                 atmos_step_num = i_outer * self.n_inner_steps + i_inner
-                atmos_step, _ = next(atmos_generator)
+                atmos_step = next(atmos_generator).output
                 yield ComponentStepPrediction(
                     realm="atmosphere",
                     data=atmos_step,
@@ -2594,7 +2594,7 @@ class CoupledStepper:
                 labels=ice_window.labels,
             )
             # predict and yield a single ocean step
-            ice_step, _ = next(
+            ice_step = next(
                 iter(
                     self.ice.get_prediction_generator(
                         ice_ic_state,
@@ -2603,7 +2603,7 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            )
+            ).output
             yield ComponentStepPrediction(
                 realm="ice",
                 data=ice_step,
@@ -2751,7 +2751,7 @@ class CoupledStepper:
             # predict and yield atmosphere steps
             for i_inner in range(self.n_inner_steps):
                 atmos_step_num = i_outer * self.n_inner_steps + i_inner
-                atmos_step, _ = next(atmos_generator)
+                atmos_step = next(atmos_generator).output
                 yield ComponentStepPrediction(
                     realm="atmosphere",
                     data=atmos_step,
@@ -2761,7 +2761,7 @@ class CoupledStepper:
                 atmos_steps.append(atmos_step)
 
                 ice_step_num = i_outer * self.n_inner_steps + i_inner
-                ice_step, _ = next(ice_generator)
+                ice_step = next(ice_generator).output
                 yield ComponentStepPrediction(
                     realm="ice",
                     data=ice_step,
@@ -2803,7 +2803,7 @@ class CoupledStepper:
                 labels=ocean_window.labels,
             )
             # predict and yield a single ocean step
-            ocean_step, _ = next(
+            ocean_step = next(
                 iter(
                     self.ocean.get_prediction_generator(
                         ocean_ic_state,
@@ -2812,7 +2812,7 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            )
+            ).output
             yield ComponentStepPrediction(
                 realm="ocean",
                 data=ocean_step,

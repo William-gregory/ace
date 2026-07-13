@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -184,18 +185,36 @@ class InlineInferenceConfig:
         def factory():
             batch = next(iter(data.loader))
             initial_times = batch.ocean_data.time.isel(time=0)
-            n_timesteps_ocean = self.n_coupled_steps + stepper.ocean.n_ic_timesteps
-            n_timesteps_atmosphere = (
-                self.n_coupled_steps * stepper.n_inner_steps
-                + stepper.atmosphere.n_ic_timesteps
-            )
+            n_timesteps_ocean = None
+            n_timesteps_ice = None
+            n_timesteps_atmosphere = None
+            ocean_norm = None
+            ice_norm = None
+            atmos_norm = None
+            if stepper.ocean is not None:
+                n_timesteps_ocean = self.n_coupled_steps + stepper.ocean.n_ic_timesteps
+                ocean_norm = stepper.ocean.normalizer.normalize
+            if stepper.atmosphere is not None:
+                n_timesteps_atmosphere = (
+                    self.n_coupled_steps * stepper.n_inner_steps
+                    + stepper.atmosphere.n_ic_timesteps
+                )
+                atmos_norm = stepper.atmosphere.normalizer.normalize
+            if stepper.ice is not None:
+                n_timesteps_ice = (
+                    self.n_coupled_steps * stepper.n_inner_steps
+                    + stepper.ice.n_ic_timesteps
+                )
+                ice_norm = stepper.ice.normalizer.normalize
             return self.aggregator.build(
                 dataset_info=dataset_info,
                 n_timesteps_ocean=n_timesteps_ocean,
+                n_timesteps_ice=n_timesteps_ice,
                 n_timesteps_atmosphere=n_timesteps_atmosphere,
                 initial_time=initial_times,
-                ocean_normalize=stepper.ocean.normalizer.normalize,
-                atmosphere_normalize=stepper.atmosphere.normalizer.normalize,
+                ocean_normalize=ocean_norm,
+                atmosphere_normalize=atmos_norm,
+                ice_normalize=ice_norm,
                 save_diagnostics=save_per_epoch_diagnostics,
                 output_dir=os.path.join(output_dir, name),
             )
@@ -570,9 +589,9 @@ class TrainConfig:
     def ice_timestep(self) -> datetime.timedelta:
         return self.config.stepper.ice_timestep
 
-    def get_stepper(self, dataset_info: CoupledDatasetInfo) -> CoupledTrainStepper:
-        return self.config.stepper_training.get_train_stepper(
-            stepper_config=self.config.stepper,
+    def _get_stepper(self, dataset_info: CoupledDatasetInfo) -> CoupledTrainStepper:
+        return self.stepper_training.get_train_stepper(
+            stepper_config=self.stepper,
             dataset_info=dataset_info,
         )
 

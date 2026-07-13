@@ -97,6 +97,7 @@ stepper:
           - 1
           - 1
           norm: instance
+          partial_convolutions: true
       normalization:
         network:
           global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_mu.nc
