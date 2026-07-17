@@ -13,6 +13,7 @@ from fme.ace.models.ocean.m2lines.layers import (
     ZonallyPeriodicBilinearUpsample,
 )
 from fme.ace.models.ocean.m2lines.utils import pairwise
+from fme.core.dataset_info import DatasetInfo
 
 
 class Samudra(torch.nn.Module):
@@ -63,6 +64,8 @@ class Samudra(torch.nn.Module):
         self,
         input_channels: int,
         output_channels: int,
+        dataset_info: DatasetInfo,
+        in_names: list[str] | None = None,
         ch_width: list[int] = dataclasses.field(
             default_factory=lambda: [200, 250, 300, 400]
         ),
@@ -79,6 +82,7 @@ class Samudra(torch.nn.Module):
 
         self.input_channels = input_channels
         self.output_channels = output_channels
+        self.dataset_info = dataset_info
         self.hist = 0  # Fixed
         self.ch_width = ch_width
         self.dilation = dilation
@@ -98,6 +102,19 @@ class Samudra(torch.nn.Module):
         )
 
         ch_width_with_input = (self.input_channels, *self.ch_width)
+
+        spatial_mask_provider = dataset_info.spatial_mask_provider
+        img_shape = dataset_info.img_shape  # (H, W)
+        if in_names is not None:
+            per_channel_masks = []
+            for name in in_names:
+                m = spatial_mask_provider.get_mask_tensor_for(name)
+                if m is None:
+                    m = torch.ones(img_shape)
+                per_channel_masks.append(m)
+            self.channel_mask = torch.stack(per_channel_masks, dim=0).unsqueeze(0)
+        else:
+            self.channel_mask = torch.ones((1, self.input_channels, *img_shape))
 
         # going down
         layers = []
@@ -181,7 +198,12 @@ class Samudra(torch.nn.Module):
             if self.checkpoint_strategy == "all":
                 fts = torch.utils.checkpoint.checkpoint(layer, fts, use_reentrant=False)
             else:
-                fts = layer(fts)
+                if count == 0:
+                    channel_mask = self.channel_mask.to(dtype=fts.dtype)
+                    channel_mask = self.channel_mask.expand(fts.shape[0], -1, -1, -1)
+                    fts = layer(fts * channel_mask)
+                else:
+                    fts = layer(fts)
             if count < self.num_steps:
                 if isinstance(layer, ConvNeXtBlock):
                     temp.append(fts)

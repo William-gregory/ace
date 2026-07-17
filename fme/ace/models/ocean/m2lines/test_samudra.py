@@ -7,12 +7,31 @@ from fme.ace.models.ocean.m2lines.layers import (
     BilinearUpsample,
     ZonallyPeriodicBilinearUpsample,
 )
+from fme.core.dataset_info import DatasetInfo
 from fme.core.device import get_device
+from fme.core.spatial_mask_provider import SpatialMaskProvider
 from fme.core.testing import validate_tensor
 
 DIR = os.path.abspath(os.path.dirname(__file__))
 
 from fme.ace.models.ocean.m2lines.samudra import Samudra
+
+
+def dummy_datasetinfo(height: int, width: int) -> DatasetInfo:
+    """Create a dummy DatasetInfo for testing."""
+    spatial_mask_provider = SpatialMaskProvider(
+        masks={
+            "mask_2d": torch.ones(height, width),
+            "mask_0": torch.ones(height, width),
+            "mask_1": torch.ones(height, width),
+            "mask_2": torch.ones(height, width),
+        }
+    )
+
+    return DatasetInfo(
+        img_shape=(height, width),
+        spatial_mask_provider=spatial_mask_provider,
+    )
 
 
 @pytest.mark.parametrize(
@@ -50,12 +69,16 @@ def test_samudra_zonally_periodic_upsample_runs_and_differs():
     input_channels, output_channels = 2, 3
     img_shape = (9, 18)
     n_samples = 4
+    dataset_info = dummy_datasetinfo(9, 18)
+    in_names = ["hfds", "thetao_0", "thetao_1", "thetao_2"]
 
     def build(zonally_periodic_upsample: bool) -> Samudra:
         torch.manual_seed(0)
         return Samudra(
             input_channels=input_channels,
             output_channels=output_channels,
+            dataset_info=dataset_info,
+            in_names=in_names,
             ch_width=[3, 3],
             dilation=[1, 2],
             n_layers=[1, 1],
@@ -86,6 +109,8 @@ def test_samudra_normalization(norm):
     batch_size = 2
     height = 64
     width = 64
+    dataset_info = dummy_datasetinfo(height, width)
+    in_names = ["hfds", "thetao_0", "thetao_1", "thetao_2"]
 
     # Initialize model
     if norm == "group":
@@ -93,6 +118,8 @@ def test_samudra_normalization(norm):
             model = Samudra(
                 input_channels=input_channels,
                 output_channels=output_channels,
+                dataset_info=dataset_info,
+                in_names=in_names,
                 ch_width=[32, 64],
                 dilation=[1, 2],
                 n_layers=[1, 1],
@@ -103,6 +130,8 @@ def test_samudra_normalization(norm):
     model = Samudra(
         input_channels=input_channels,
         output_channels=output_channels,
+        dataset_info=dataset_info,
+        in_names=in_names,
         ch_width=[32, 64],
         dilation=[1, 2],
         n_layers=[1, 1],
@@ -127,9 +156,13 @@ def test_samudra_normalization(norm):
 
 
 def test_samudra_norm_kwargs():
+    dataset_info = dummy_datasetinfo(64, 64)
+    in_names = ["hfds", "thetao_0", "thetao_1", "thetao_2"]
     model = Samudra(
         input_channels=4,
         output_channels=3,
+        dataset_info=dataset_info,
+        in_names=in_names,
         ch_width=[32, 64],
         dilation=[1, 2],
         n_layers=[1, 1],
@@ -148,9 +181,13 @@ def test_samudra_output_is_unchanged():
     img_shape = (9, 18)
     n_samples = 4
     device = get_device()
+    dataset_info = dummy_datasetinfo(9, 18)
+    in_names = ["hfds", "thetao_0"]
     model = Samudra(
         input_channels=input_channels,
         output_channels=output_channels,
+        dataset_info=dataset_info,
+        in_names=in_names,
         ch_width=[3, 3],
         dilation=[1, 2],
         n_layers=[1, 1],
