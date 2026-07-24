@@ -2,7 +2,7 @@ import dataclasses
 import datetime
 import os
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 import xarray as xr
@@ -47,7 +47,7 @@ from fme.core.generics.aggregator import (
     InferenceLogs,
     InferenceSummary,
 )
-from fme.core.typing_ import TensorDict, TensorMapping
+from fme.core.normalizer import NormalizeFn
 from fme.coupled.data_loading.batch_data import (
     CoupledPairedData,
     CoupledPrognosticState,
@@ -106,6 +106,7 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         ocean_channel_mean_names: Sequence[str] | None = None,
         ice_channel_mean_names: Sequence[str] | None = None,
         atmosphere_channel_mean_names: Sequence[str] | None = None,
+        config: OneStepAggregatorConfig | None = None,
     ):
         """
         Args:
@@ -119,6 +120,8 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
             ice_channel_mean_names: Names to include in ice channel-mean metrics.
             atmosphere_channel_mean_names: Names to include in atmosphere channel-mean
                 metrics.
+            config: Configuration applied to both the ocean and atmosphere
+                sub-aggregators. Defaults to ``OneStepAggregatorConfig()``.
 
         """
         self._dist = Distributed.get_instance()
@@ -127,7 +130,7 @@ class OneStepAggregator(AggregatorABC[CoupledTrainOutput]):
         self._loss_ice = torch.tensor(0.0, device=get_device())
         self._loss_atmos = torch.tensor(0.0, device=get_device())
         self._n_batches = 0
-        config = OneStepAggregatorConfig()
+        config = config or OneStepAggregatorConfig()
         ocean_agg = None
         ice_agg = None
         atmos_agg = None
@@ -419,9 +422,9 @@ class InferenceEvaluatorAggregatorConfig:
         n_timesteps_ocean: int | None = None,
         n_timesteps_ice: int | None = None,
         n_timesteps_atmosphere: int | None = None,
-        ocean_normalize: Callable[[TensorMapping], TensorDict] | None = None,
-        ice_normalize: Callable[[TensorMapping], TensorDict] | None = None,
-        atmosphere_normalize: Callable[[TensorMapping], TensorDict] | None = None,
+        ocean_normalize: NormalizeFn | None = None,
+        ice_normalize: NormalizeFn | None = None,
+        atmosphere_normalize: NormalizeFn | None = None,
         save_diagnostics: bool = True,
         output_dir: str | None = None,
         ocean_channel_mean_names: Sequence[str] | None = None,
