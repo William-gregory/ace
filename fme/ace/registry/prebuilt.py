@@ -22,6 +22,5 @@ class PreBuiltBuilder(ModuleConfig):
         n_in_channels: int,
         n_out_channels: int,
         dataset_info: DatasetInfo,
-        in_names: list[str] | None = None,
     ) -> nn.Module:
         return self.module

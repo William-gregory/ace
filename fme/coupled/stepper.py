@@ -3506,7 +3506,7 @@ class CoupledTrainStepperConfig:
                     "or the component training configs' "
                     "ParameterInitializationConfig.weights_path, but not both."
                 )
-        if self.ocean.loss_is_null and self.atmosphere.loss_is_null:
+        if self.ocean.loss_is_null and self.ice.loss_is_null and self.atmosphere.loss_is_null:
             raise ValueError(
                 "At least one of ocean or atmosphere loss must be "
                 "non-null (non-zero loss_weight and non-zero n_steps)."

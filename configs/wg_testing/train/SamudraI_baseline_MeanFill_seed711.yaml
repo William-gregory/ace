@@ -1,4 +1,4 @@
-experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_SamudraI_baseline_partialConv_seed711_2GPU
+experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_SamudraI_baseline_MeanFill_seed711_2GPU
 save_checkpoint: true
 seed: 711
 validate_using_ema: true
@@ -71,7 +71,7 @@ stepper_training:
 stepper:
   input_masking:
     mask_value: 0
-    fill_value: 0.0
+    fill_value: mean
     exclude_names_and_prefixes:
     - land_fraction
     - sea_surface_fraction
@@ -97,7 +97,6 @@ stepper:
           - 1
           - 1
           norm: instance
-          partial_convolutions: true
       normalization:
         network:
           global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_mu.nc
