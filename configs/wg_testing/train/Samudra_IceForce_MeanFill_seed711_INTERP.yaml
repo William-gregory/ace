@@ -1,25 +1,19 @@
-experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_Samudra_IceForce_GraphNN_seed711_8GPU
+experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_Samudra_IceForce_MeanFill_seed711_INTERP_2GPU
 save_checkpoint: true
 seed: 711
 validate_using_ema: true
 train_evaluation_samples: 0
 ema:
   decay: 0.999
-max_epochs: 400
+max_epochs: 100
 inference:
-  n_forward_steps: 92
-  forward_steps_in_memory: 23
+  n_forward_steps: 365
+  forward_steps_in_memory: 40
   loader:
     start_indices:
       times:
-      - '2006-01-03T12:00:00'
-      - '2007-04-03T12:00:00'
-      - '2008-07-02T12:00:00'
-      - '2009-10-05T12:00:00'
-      - '2011-01-03T12:00:00'
-      - '2012-04-03T12:00:00'
-      - '2013-07-02T12:00:00'
-      - '2014-10-05T12:00:00'
+      - '1991-01-03T12:00:00'
+      - '1996-01-03T12:00:00'
     dataset:
       data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
       file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
@@ -35,30 +29,37 @@ logging:
   entity: ai2cm
   wandb_dir_in_experiment_dir: true
 train_loader:
-  batch_size: 32
+  batch_size: 8
   num_data_workers: 2
   prefetch_factor: 2
-  time_buffer: 16
+  time_buffer: 20
   dataset:
-    data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
-    file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
-    engine: zarr
-    subset:
-      start_time: '1969-01-03T12:00:00'
-      stop_time: '2005-12-27T12:00:00'
+    concat:
+    - data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
+      file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
+      engine: zarr
+      subset:
+        start_time: '1969-01-03T12:00:00'
+        stop_time: '1990-12-29T12:00:00'
+    - data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
+      file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
+      engine: zarr
+      subset:
+        start_time: '2008-01-03T12:00:00'
+        stop_time: '2022-12-29T12:00:00'
 validation:
   loader:
-    batch_size: 32
+    batch_size: 8
     num_data_workers: 2
     prefetch_factor: 2
-    time_buffer: 16
+    time_buffer: 20
     dataset:
       data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
       file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
       engine: zarr
       subset:
-        start_time: '2016-01-03T12:00:00'
-        stop_time: '2022-12-27T12:00:00'
+        start_time: '2001-01-03T12:00:00'
+        stop_time: '2007-12-29T12:00:00'
 train_aggregator:
   spherical_power_spectrum: false
   weighted_rmse: false
@@ -77,7 +78,7 @@ stepper_training:
 stepper:
   input_masking:
     mask_value: 0
-    fill_value: 0.0
+    fill_value: mean
     exclude_names_and_prefixes:
     - land_fraction
     - sea_surface_fraction
@@ -85,22 +86,28 @@ stepper:
     type: single_module
     config:
       builder:
-        type: FloeNet
+        type: Samudra
         config:
-          latent_dimension: 512
-          activation: SiLU
-          meshes: 6
-          M0: 4
-          bias: true
-          radius_fraction: 1
-          layernorm: true
-          processor_steps: 4
-          residual: true
-          is_ocean: true
+          ch_width:
+          - 200
+          - 250
+          - 300
+          - 400
+          dilation:
+          - 1
+          - 2
+          - 4
+          - 8
+          n_layers:
+          - 1
+          - 1
+          - 1
+          - 1
+          norm: instance
       normalization:
         network:
-          global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_mu.nc
-          global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_sigma.nc
+          global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-1990_2008-2022.SamudraI_5daily_means_mu.nc
+          global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-1990_2008-2022.SamudraI_5daily_means_sigma.nc
       corrector:
         type: ocean_corrector
         config:
@@ -136,11 +143,12 @@ stepper:
       - wind_stress_x
       - wind_stress_y
       - siconc
+      - sisnmass
       - simass
       - SALTF
       - LSRCi
       - LSNKi
-      - XPRTi
+      - LSNKs
       - BMELT
       in_names:
       #forcing
@@ -158,11 +166,12 @@ stepper:
       - wind_stress_x
       - wind_stress_y
       - siconc
+      - sisnmass
       - simass
       - SALTF
       - LSRCi
       - LSNKi
-      - XPRTi
+      - LSNKs
       - BMELT
       #prognostic
       - tos

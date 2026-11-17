@@ -699,6 +699,15 @@ class CoupledStepperConfig:
             )
         return names
 
+    def _ocean_supplied_ice_names(self) -> set[str]:
+        """Names written onto the ice forcings from the ocean component
+        in ``CoupledStepper._get_ice_forcings``, known statically from
+        this config.
+        """
+        names = set(self._ocean_to_ice_forcing_names)
+        
+        return names
+
     def validate_prescribed_prognostic_names(self) -> None:
         """Raise if a prescribed atmosphere prognostic read from the forcing
         data would be silently overwritten by an ocean-supplied field of the
@@ -710,13 +719,38 @@ class CoupledStepperConfig:
         atmosphere-supplied ocean forcings are input-only names, which cannot
         be prognostic and therefore cannot be prescribed.
         """
-        prescribed = self.atmosphere.stepper.get_prescribed_prognostic_names()
-        clobbered = sorted(set(prescribed) & self._ocean_supplied_atmosphere_names())
-        if clobbered:
-            raise ValueError(
-                "Atmosphere prescribed_prognostic_names overlap ocean-supplied "
-                f"forcings and would be overwritten: {clobbered}."
-            )
+        if self.atmosphere is None:
+            prescribed = self.ice.stepper.get_prescribed_prognostic_names()
+            clobbered = sorted(set(prescribed) & self._ocean_supplied_ice_names())
+            if clobbered:
+                raise ValueError(
+                    "Ice prescribed_prognostic_names overlap ocean-supplied "
+                    f"forcings and would be overwritten: {clobbered}."
+                )
+        elif self.ice is None:
+            prescribed = self.atmosphere.stepper.get_prescribed_prognostic_names()
+            clobbered = sorted(set(prescribed) & self._ocean_supplied_atmosphere_names())
+            if clobbered:
+                raise ValueError(
+                    "Atmosphere prescribed_prognostic_names overlap ocean-supplied "
+                    f"forcings and would be overwritten: {clobbered}."
+                )
+        elif self.ocean is None:
+            prescribed = self.atmosphere.stepper.get_prescribed_prognostic_names()
+            clobbered = sorted(set(prescribed) & self._ice_supplied_atmosphere_names())
+            if clobbered:
+                raise ValueError(
+                    "Atmosphere prescribed_prognostic_names overlap ice-supplied "
+                    f"forcings and would be overwritten: {clobbered}."
+                )
+        else:
+            prescribed = self.atmosphere.stepper.get_prescribed_prognostic_names()
+            clobbered = sorted(set(prescribed) & self._ocean_supplied_atmosphere_names())
+            if clobbered:
+                raise ValueError(
+                    "Atmosphere prescribed_prognostic_names overlap ocean-supplied "
+                    f"forcings and would be overwritten: {clobbered}."
+                )
 
     @property
     def timestep(self) -> datetime.timedelta:
@@ -880,9 +914,7 @@ class CoupledStepperConfig:
         """
         prescribed_ice = self.ice.stepper.get_prescribed_prognostic_names()
         return list(
-            set(self._ice_forcing_exogenous_names)
-            .difference(set(self._shared_forcing_exogenous_names))
-            .union(prescribed_ice)
+            set(self._ice_forcing_exogenous_names).union(prescribed_ice)
         )
 
     @property
@@ -1781,8 +1813,12 @@ class CoupledStepper:
         # Alias each component's nested StepperConfig to the loaded Stepper's
         # own config so forcing-window names (computed from CoupledStepperConfig)
         # reflect any inference-time overrides applied to the component steppers.
-        config.ocean.stepper = ocean.config
-        config.atmosphere.stepper = atmosphere.config
+        if config.ocean is not None:
+            config.ocean.stepper = ocean.config
+        if config.ice is not None:
+            config.ice.stepper = ice.config
+        if config.atmosphere is not None:
+            config.atmosphere.stepper = atmosphere.config
         self._dataset_info = dataset_info
         self._ocean_spatial_mask_provider = dataset_info.ocean_spatial_mask_provider
         self._ice_spatial_mask_provider = dataset_info.ice_spatial_mask_provider
@@ -2543,15 +2579,19 @@ class CoupledStepper:
                 optimizer,
             )
             ice_steps = []
+            ice_stepper_state: StepperState | None = None
 
              # predict and yield ice steps
             for i_inner in range(self.n_inner_steps):
                 ice_step_num = i_outer * self.n_inner_steps + i_inner
-                ice_step = next(ice_generator).output
+                ice_result = next(ice_generator)
+                ice_step = ice_result.output
+                ice_stepper_state = ice_result.stepper_state
                 yield ComponentStepPrediction(
                     realm="ice",
                     data=ice_step,
                     step=ice_step_num,
+                    stepper_state=ice_stepper_state,
                 )
                 ice_step = optimizer.detach_if_using_gradient_accumulation(ice_step)
                 ice_steps.append(ice_step)
@@ -2578,7 +2618,7 @@ class CoupledStepper:
                 labels=ocean_window.labels,
             )
             # predict and yield a single ocean step
-            ocean_step = next(
+            ocean_result = next(
                 iter(
                     self.ocean.get_prediction_generator(
                         ocean_ic_state,
@@ -2587,11 +2627,13 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            ).output
+            )
+            ocean_step = ocean_result.output
             yield ComponentStepPrediction(
                 realm="ocean",
                 data=ocean_step,
                 step=i_outer,
+                stepper_state=ocean_result.stepper_state,
             )
 
             # prepare ic states for next coupled step
@@ -2681,15 +2723,18 @@ class CoupledStepper:
                 optimizer,
             )
             atmos_steps = []
+            atmos_stepper_state: StepperState | None = None
 
             # predict and yield atmosphere steps
             for i_inner in range(self.n_inner_steps):
                 atmos_step_num = i_outer * self.n_inner_steps + i_inner
-                atmos_step = next(atmos_generator).output
+                atmos_result = next(atmos_generator)
+                atmos_step = atmos_result.output
                 yield ComponentStepPrediction(
                     realm="atmosphere",
                     data=atmos_step,
                     step=atmos_step_num,
+                    stepper_state=atmos_result.stepper_state,
                 )
                 atmos_step = optimizer.detach_if_using_gradient_accumulation(atmos_step)
                 atmos_steps.append(atmos_step)
@@ -2716,7 +2761,7 @@ class CoupledStepper:
                 labels=ice_window.labels,
             )
             # predict and yield a single ocean step
-            ice_step = next(
+            ice_result = next(
                 iter(
                     self.ice.get_prediction_generator(
                         ice_ic_state,
@@ -2725,11 +2770,13 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            ).output
+            )
+            ice_step = ice_result.output
             yield ComponentStepPrediction(
                 realm="ice",
                 data=ice_step,
                 step=i_outer,
+                stepper_state=ice_result.stepper_state
             )
 
             # prepare ic states for next coupled step
@@ -2873,21 +2920,25 @@ class CoupledStepper:
             # predict and yield atmosphere steps
             for i_inner in range(self.n_inner_steps):
                 atmos_step_num = i_outer * self.n_inner_steps + i_inner
-                atmos_step = next(atmos_generator).output
+                atmos_result = next(atmos_generator)
+                atmos_step = atmos_result.output
                 yield ComponentStepPrediction(
                     realm="atmosphere",
                     data=atmos_step,
                     step=atmos_step_num,
+                    stepper_state=atmos_result.stepper_state,
                 )
                 atmos_step = optimizer.detach_if_using_gradient_accumulation(atmos_step)
                 atmos_steps.append(atmos_step)
 
                 ice_step_num = i_outer * self.n_inner_steps + i_inner
-                ice_step = next(ice_generator).output
+                ice_result = next(ice_generator)
+                ice_step = ice_result.output
                 yield ComponentStepPrediction(
                     realm="ice",
                     data=ice_step,
                     step=ice_step_num,
+                    stepper_state=ice_result.stepper_state,
                 )
                 ice_step = optimizer.detach_if_using_gradient_accumulation(ice_step)
                 ice_steps.append(ice_step)
@@ -2925,7 +2976,7 @@ class CoupledStepper:
                 labels=ocean_window.labels,
             )
             # predict and yield a single ocean step
-            ocean_step = next(
+            ocean_result = next(
                 iter(
                     self.ocean.get_prediction_generator(
                         ocean_ic_state,
@@ -2934,11 +2985,13 @@ class CoupledStepper:
                         optimizer=optimizer,
                     )
                 )
-            ).output
+            )
+            ocean_step = ocean_result.output
             yield ComponentStepPrediction(
                 realm="ocean",
                 data=ocean_step,
                 step=i_outer,
+                stepper_state=ocean_result.stepper_state,
             )
 
             # prepare ic states for next coupled step

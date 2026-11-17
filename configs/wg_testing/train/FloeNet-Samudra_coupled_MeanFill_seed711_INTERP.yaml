@@ -1,4 +1,4 @@
-experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_FloeNet-SamudraI_coupled_finetune_skipphase1_seed711_4GPU
+experiment_dir: /scratch/cimes/wg4031/fme/train/OM4_FloeNet-SamudraI_coupled_MeanFill_seed711_INTERP_4GPU
 save_checkpoint: true
 save_best_inference_epoch_checkpoints: false
 checkpoint_every_n_batches: 100
@@ -31,10 +31,10 @@ inference:
           value: 0.0
     start_indices:
       times:
-      - '2006-01-03T12:00:00'
-      - '2008-07-02T12:00:00'
-      - '2011-01-03T12:00:00'
-      - '2013-07-02T12:00:00'
+      - '1991-01-03T12:00:00'
+      - '1993-07-02T12:00:00'
+      - '1996-01-03T12:00:00'
+      - '1998-07-02T12:00:00'
     num_data_workers: 2
   aggregator:
     log_zonal_mean_images: false
@@ -50,26 +50,47 @@ train_loader:
   num_data_workers: 2
   prefetch_factor: 2
   dataset:
-    ocean:
-      data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
-      file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
-      engine: zarr
-      subset:
-        start_time: '1969-01-03T12:00:00'
-        stop_time: '2005-12-27T12:00:00'
-      fill_nans:
-        method: "constant"
-        value: 0.0
-    ice:
-      data_path: /scratch/cimes/wg4031/Emulator_data/Ice/
-      file_pattern: 1958-2022.OM41deg_FloeNet_6hourly_NoLeap.zarr
-      engine: zarr
-      subset:
-        start_time: '1969-01-03T12:00:00'
-        stop_time: '2005-12-27T12:00:00'
-      fill_nans:
-        method: "constant"
-        value: 0.0
+    concat:
+    - ocean:
+        data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
+        file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
+        engine: zarr
+        subset:
+          start_time: '1969-01-03T12:00:00'
+          stop_time: '1990-12-29T12:00:00'
+        fill_nans:
+          method: "constant"
+          value: 0.0
+      ice:
+        data_path: /scratch/cimes/wg4031/Emulator_data/Ice/
+        file_pattern: 1958-2022.OM41deg_FloeNet_6hourly_NoLeap.zarr
+        engine: zarr
+        subset:
+          start_time: '1969-01-03T12:00:00'
+          stop_time: '1990-12-29T12:00:00'
+        fill_nans:
+          method: "constant"
+          value: 0.0
+    - ocean:
+        data_path: /scratch/cimes/wg4031/Emulator_data/Ocean/
+        file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
+        engine: zarr
+        subset:
+          start_time: '2008-01-03T12:00:00'
+          stop_time: '2022-12-29T12:00:00'
+        fill_nans:
+          method: "constant"
+          value: 0.0
+      ice:
+        data_path: /scratch/cimes/wg4031/Emulator_data/Ice/
+        file_pattern: 1958-2022.OM41deg_FloeNet_6hourly_NoLeap.zarr
+        engine: zarr
+        subset:
+          start_time: '2008-01-03T12:00:00'
+          stop_time: '2022-12-29T12:00:00'
+        fill_nans:
+          method: "constant"
+          value: 0.0
 validation:
   loader:
     batch_size: 8
@@ -81,8 +102,8 @@ validation:
         file_pattern: 1958-2022.OM41deg_Samudra_5daily_means_NoLeap.zarr
         engine: zarr
         subset:
-          start_time: '2016-01-03T12:00:00'
-          stop_time: '2022-12-27T12:00:00'
+          start_time: '2001-01-03T12:00:00'
+          stop_time: '2007-12-29T12:00:00'
         fill_nans:
           method: "constant"
           value: 0.0
@@ -91,34 +112,29 @@ validation:
         file_pattern: 1958-2022.OM41deg_FloeNet_6hourly_NoLeap.zarr
         engine: zarr
         subset:
-          start_time: '2016-01-03T12:00:00'
-          stop_time: '2022-12-27T12:00:00'
+          start_time: '2001-01-03T12:00:00'
+          stop_time: '2007-12-29T12:00:00'
         fill_nans:
           method: "constant"
           value: 0.0
 optimization:
   enable_automatic_mixed_precision: false
-  lr: 0.00001
+  lr: 0.0001
   optimizer_type: AdamW
   kwargs:
     fused: true
     weight_decay: 0.01
   use_gradient_accumulation: true
-  scheduler:
-    type: CosineAnnealingLR
 stepper_training:
-  n_coupled_steps: 4
+  n_coupled_steps: 8
   ocean:
     parameter_init:
-      weights_path: /scratch/cimes/wg4031/fme/train/OM4_Samudra_IceForce_seed711_2GPU/training_checkpoints/best_inference_ckpt.tar
+      weights_path: /scratch/cimes/wg4031/fme/train/OM4_Samudra_IceForce_MeanFill_seed711_INTERP_2GPU/training_checkpoints/best_inference_ckpt.tar
     loss:
       type: MSE
-    loss_contributions:
-      n_steps: 4
-      weight: 1.0
   ice:
     parameter_init:
-      weights_path: /scratch/cimes/wg4031/fme/train/OM4_FloeNet_6h_5docn_nexStep_seed711_4GPU/training_checkpoints/best_inference_ckpt.tar
+      weights_path: /scratch/cimes/wg4031/fme/train/OM4_FloeNet_6h_5docn_nexStep_seed711_INTERP_4GPU/training_checkpoints/best_inference_ckpt.tar
     loss:
       type: MSE
       weights:
@@ -138,9 +154,6 @@ stepper_training:
         XPRTs: 1
         BMELT: 1
         TMELT: 1
-    loss_contributions:
-      n_steps: 8
-      weight: 1.0
 stepper:
   sst_name: tos
   ocean:
@@ -148,7 +161,7 @@ stepper:
     stepper:
       input_masking:
         mask_value: 0
-        fill_value: 0.0
+        fill_value: mean
       step:
         type: single_module
         config:
@@ -173,14 +186,11 @@ stepper:
               norm: instance
           normalization:
             network:
-              global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_mu.nc
-              global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-2005.SamudraI_5daily_means_sigma.nc
+              global_means_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-1990_2008-2022.SamudraI_5daily_means_mu.nc
+              global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ocean/1969-1990_2008-2022.SamudraI_5daily_means_sigma.nc
           corrector:
             type: ocean_corrector
             config:
-              masking:
-                mask_value: 0
-                fill_value: 0.0
               force_positive_names:
               - so_0
               - so_1
@@ -213,11 +223,12 @@ stepper:
           - wind_stress_x
           - wind_stress_y
           - siconc
+          - sisnmass
           - simass
           - SALTF
           - LSRCi
           - LSNKi
-          - XPRTi
+          - LSNKs
           - BMELT
           in_names:
           #forcing
@@ -235,11 +246,12 @@ stepper:
           - wind_stress_x
           - wind_stress_y
           - siconc
+          - sisnmass
           - simass
           - SALTF
           - LSRCi
           - LSNKi
-          - XPRTi
+          - LSNKs
           - BMELT
           #prognostic
           - tos
@@ -432,8 +444,8 @@ stepper:
               is_ocean: true
           normalization:
             network:
-              global_means_path: /scratch/cimes/wg4031/Emulator_data/Ice/1969-2005.FloeNet_6hourly_means.nc
-              global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ice/1969-2005.FloeNet_6hourly_stds.nc
+              global_means_path: /scratch/cimes/wg4031/Emulator_data/Ice/1969-1990_2008-2022.FloeNet_6hourly_means.nc
+              global_stds_path: /scratch/cimes/wg4031/Emulator_data/Ice/1969-1990_2008-2022.FloeNet_6hourly_stds.nc
           corrector:
             type: ice_corrector
             config:

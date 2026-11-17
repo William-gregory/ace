@@ -103,36 +103,31 @@ class CoupledDataLoaderConfig:
 
     @property
     def atmosphere_available_labels(self) -> set[str] | None:
-        """
-        Return the labels that are available in the atmosphere dataset.
-        """
-        if self.dataset.atmosphere is None:
-            return None
-        return accumulate_labels(
-            [ds.atmosphere.available_labels for ds in self.dataset.coupled_configs]
-        )
+        labels = [
+            ds.atmosphere.available_labels
+            for ds in self.dataset.coupled_configs
+            if ds.atmosphere is not None
+        ]
+        return accumulate_labels(labels) if labels else None
 
     @property
     def ice_available_labels(self) -> set[str] | None:
-        """
-        Return the labels that are available in the ice dataset.
-        """
-        if self.dataset.ice is None:
-            return None
-        return accumulate_labels(
-            [ds.ice.available_labels for ds in self.dataset.coupled_configs]
-        )
+        labels = [
+            ds.ice.available_labels
+            for ds in self.dataset.coupled_configs
+            if ds.ice is not None
+        ]
+        return accumulate_labels(labels) if labels else None
+
 
     @property
     def ocean_available_labels(self) -> set[str] | None:
-        """
-        Return the labels that are available in the ocean dataset.
-        """
-        if self.dataset.ocean is None:
-            return None
-        return accumulate_labels(
-            [ds.ocean.available_labels for ds in self.dataset.coupled_configs]
-        )
+        labels = [
+            ds.ocean.available_labels
+            for ds in self.dataset.coupled_configs
+            if ds.ocean is not None
+        ]
+        return accumulate_labels(labels) if labels else None
 
     @property
     def zarr_engine_used(self) -> bool:

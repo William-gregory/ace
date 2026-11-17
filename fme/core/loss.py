@@ -784,6 +784,87 @@ class EnsembleLoss(torch.nn.Module):
         return components
 
 
+class LatitudeWeightedLoss(torch.nn.Module):
+    """
+    Multiplies the element-wise output of a loss by a per-latitude weight.
+
+    Only valid for losses whose components are element-wise
+    ``StandardLoss`` tensors with latitude at dim -2 and longitude at dim -1
+    (e.g. MSE, L1).
+    """
+
+    def __init__(self, loss: torch.nn.Module, lat_weights: torch.Tensor):
+        """
+        Args:
+            loss: The wrapped loss, returning element-wise components.
+            lat_weights: Weights of shape ``(n_lat, 1)``.
+        """
+        super().__init__()
+        self.loss = loss
+        self.lat_weights = lat_weights
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> list[LossComponent]:
+        components = []
+        for c in self.loss(x, y):
+            if (
+                type(c) is not StandardLoss
+                or c.loss.ndim < 2
+                or c.loss.shape[-2] != self.lat_weights.shape[0]
+            ):
+                raise RuntimeError(
+                    "Latitude weighting requires element-wise loss components "
+                    "with latitude at dim -2 of size "
+                    f"{self.lat_weights.shape[0]}, got {type(c).__name__} with "
+                    f"shape {tuple(c.loss.shape)}."
+                )
+            components.append(StandardLoss(c.loss * self.lat_weights))
+        return components
+
+
+@dataclasses.dataclass
+class LatitudeWeightingConfig:
+    """
+    Configures a per-latitude weighting of the element-wise loss.
+
+    For ``type="sin2"`` the weight is ``w(lat) = 1 + amplitude * sin^2(lat)``,
+    which increases the weight of polar grid cells relative to equatorial
+    ones (a cell at a pole is weighted ``1 + amplitude`` times an equatorial
+    cell). Weights are normalized to have mean 1 over the latitude points, so
+    the overall loss magnitude stays comparable to the unweighted loss.
+
+    Args:
+        type: The weighting function. Only ``"sin2"`` is supported.
+        amplitude: Strength of the polar up-weighting. Must be > -1 so that
+            weights stay positive; 0 gives uniform weights.
+    """
+
+    type: Literal["sin2"] = "sin2"
+    amplitude: float = 1.0
+
+    def __post_init__(self):
+        if self.type != "sin2":
+            raise NotImplementedError(
+                f"latitude weighting type={self.type!r} not supported; use 'sin2'."
+            )
+        if self.amplitude <= -1.0:
+            raise ValueError(f"amplitude must be > -1, got {self.amplitude}")
+
+    def build_weights(self, lat: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            lat: 1D tensor of latitudes in degrees.
+
+        Returns:
+            Weights of shape ``(n_lat, 1)``, normalized to mean 1.
+        """
+        if lat.ndim != 1:
+            raise ValueError(f"lat must be 1D, got shape {tuple(lat.shape)}")
+        lat_rad = torch.deg2rad(lat.to(device=get_device(), dtype=torch.float))
+        weights = 1.0 + self.amplitude * torch.sin(lat_rad) ** 2
+        weights = weights / weights.mean()
+        return weights.unsqueeze(-1)
+
+
 @dataclasses.dataclass
 class LossConfig:
     """
@@ -799,6 +880,9 @@ class LossConfig:
             type to apply to the global mean of each sample
         global_mean_weight: the weight to apply to the global mean loss
             relative to the main loss
+        latitude_weighting: optional per-latitude weighting applied to the
+            main (element-wise) loss. Only supported for ``MSE`` and ``L1``.
+            Not applied to the global mean loss.
     """
 
     type: Literal["LpLoss", "L1", "MSE", "AreaWeightedMSE", "NaN", "EnsembleLoss"] = (
@@ -810,6 +894,7 @@ class LossConfig:
         default_factory=lambda: {}
     )
     global_mean_weight: float = 1.0
+    latitude_weighting: LatitudeWeightingConfig | None = None
 
     def __post_init__(self):
         if self.type not in (
@@ -823,15 +908,23 @@ class LossConfig:
             raise NotImplementedError(self.type)
         if self.global_mean_type is not None and self.global_mean_type != "LpLoss":
             raise NotImplementedError(self.global_mean_type)
+        if self.latitude_weighting is not None and self.type not in ("MSE", "L1"):
+            raise ValueError(
+                "latitude_weighting is only supported for loss types 'MSE' and "
+                f"'L1', got {self.type!r}."
+            )
 
     def build(
         self,
         gridded_operations: GriddedOperations | None,
+        lat: torch.Tensor | None = None,
     ) -> Any:
         """
         Args:
             gridded_operations: The gridded operations to use in the case that
                 the loss function requires use of the horizontal dimensions.
+            lat: 1D tensor of latitudes in degrees, required when
+                ``latitude_weighting`` is set.
         """
         if self.type == "LpLoss":
             main_loss = LpLoss(**self.kwargs)
@@ -866,6 +959,13 @@ class LossConfig:
                 energy_score_weight=energy_score_weight,
                 energy_score_whitening=whitening,
                 **kwargs,
+            )
+
+        if self.latitude_weighting is not None:
+            if lat is None:
+                raise ValueError("lat is required when latitude_weighting is set")
+            main_loss = LatitudeWeightedLoss(
+                main_loss, self.latitude_weighting.build_weights(lat)
             )
 
         if self.global_mean_type is not None:
@@ -950,6 +1050,8 @@ class StepLossConfig:
             indexed from 0 for the first step.
         weights: A dictionary of variable names with individual
             weights to apply to their normalized losses
+        latitude_weighting: optional per-latitude weighting of the main
+            element-wise loss (``MSE`` only), e.g. to up-weight polar cells.
     """
 
     type: Literal["LpLoss", "MSE", "AreaWeightedMSE", "EnsembleLoss"] = "MSE"
@@ -961,6 +1063,7 @@ class StepLossConfig:
     global_mean_weight: float = 1.0
     sqrt_loss_step_decay_constant: float = 0.0
     weights: dict[str, float] = dataclasses.field(default_factory=lambda: {})
+    latitude_weighting: LatitudeWeightingConfig | None = None
 
     def __post_init__(self):
         self.loss_config = LossConfig(
@@ -969,6 +1072,7 @@ class StepLossConfig:
             global_mean_type=self.global_mean_type,
             global_mean_kwargs=self.global_mean_kwargs,
             global_mean_weight=self.global_mean_weight,
+            latitude_weighting=self.latitude_weighting,
         )
 
     def build(
@@ -977,9 +1081,20 @@ class StepLossConfig:
         out_names: list[str],
         normalizer: StandardNormalizer,
         channel_dim: int = -3,
+        lat: torch.Tensor | None = None,
     ) -> StepLoss:
+        """
+        Args:
+            gridded_ops: Gridded operations for losses that need them.
+            out_names: Names of the variables the loss is computed on.
+            normalizer: Normalizer applied before computing the loss.
+            channel_dim: The channel dimension of the packed tensors.
+            lat: 1D latitudes in degrees, required when
+                ``latitude_weighting`` is set.
+        """
         loss = self.loss_config.build(
             gridded_operations=gridded_ops,
+            lat=lat,
         )
         return StepLoss(
             WeightedMappingLoss(

@@ -11,6 +11,7 @@ from fme.core.loss import (
     EnsembleComponentLoss,
     FiniteDifferenceCRPSLoss,
     GlobalMeanLoss,
+    LatitudeWeightingConfig,
     LossComponent,
     LossConfig,
     LossOutput,
@@ -997,3 +998,81 @@ def test_ensemble_loss_with_whitening_builds_and_runs(whitening):
     out = loss(x, y)
     assert all(isinstance(c, LossComponent) for c in out)
     assert torch.isfinite(_components_total(out))
+
+
+def test_latitude_weighting_config_sin2_weights():
+    lat = torch.tensor([-90.0, -30.0, 0.0, 30.0, 90.0])
+    weights = LatitudeWeightingConfig(amplitude=3.0).build_weights(lat)
+    assert weights.shape == (5, 1)
+    torch.testing.assert_close(weights.mean().cpu(), torch.tensor(1.0))
+    # symmetric about the equator, poles weighted (1 + amplitude) x equator
+    torch.testing.assert_close(weights[0], weights[-1])
+    torch.testing.assert_close(weights[0] / weights[2], torch.tensor([4.0]).to(weights))
+
+
+def test_latitude_weighting_config_zero_amplitude_is_uniform():
+    lat = torch.linspace(-89.5, 89.5, 180)
+    weights = LatitudeWeightingConfig(amplitude=0.0).build_weights(lat)
+    torch.testing.assert_close(weights, torch.ones_like(weights))
+
+
+def test_latitude_weighting_config_rejects_bad_amplitude():
+    with pytest.raises(ValueError):
+        LatitudeWeightingConfig(amplitude=-1.0)
+
+
+def test_latitude_weighting_rejects_non_elementwise_loss_type():
+    with pytest.raises(ValueError, match="latitude_weighting"):
+        StepLossConfig(type="AreaWeightedMSE", latitude_weighting=LatitudeWeightingConfig())
+
+
+def test_latitude_weighting_requires_lat():
+    config = StepLossConfig(type="MSE", latitude_weighting=LatitudeWeightingConfig())
+    normalizer = StandardNormalizer(
+        means={"a": torch.as_tensor(0.0)}, stds={"a": torch.as_tensor(1.0)}
+    )
+    with pytest.raises(ValueError, match="lat is required"):
+        config.build(None, out_names=["a"], normalizer=normalizer)
+
+
+@pytest.mark.parametrize("ensemble", [False, True])
+def test_StepLossConfig_latitude_weighting(ensemble: bool):
+    nlat, nlon = 4, 8
+    lat = torch.tensor([-60.0, -20.0, 20.0, 60.0])
+    out_names = ["a", "b"]
+    normalizer = StandardNormalizer(
+        means={n: torch.as_tensor(0.0) for n in out_names},
+        stds={n: torch.as_tensor(1.0) for n in out_names},
+    )
+    lat_config = LatitudeWeightingConfig(amplitude=2.0)
+    weighted = StepLossConfig(type="MSE", latitude_weighting=lat_config).build(
+        None, out_names=out_names, normalizer=normalizer, lat=lat
+    )
+    unweighted = StepLossConfig(type="MSE").build(
+        None, out_names=out_names, normalizer=normalizer
+    )
+    shape = (3, 2, nlat, nlon) if ensemble else (3, nlat, nlon)
+    torch.manual_seed(0)
+    x = {n: torch.randn(*shape, device=get_device()) for n in out_names}
+    y = {n: torch.zeros(*shape, device=get_device()) for n in out_names}
+    w = lat_config.build_weights(lat)  # (nlat, 1)
+    sq = torch.stack([x[n] ** 2 for n in out_names])
+    expected = (sq * w).mean()
+    torch.testing.assert_close(weighted(x, y, step=0).total(), expected)
+    torch.testing.assert_close(unweighted(x, y, step=0).total(), sq.mean())
+
+
+def test_latitude_weighting_only_applies_to_main_loss_with_global_mean():
+    nlat, nlon = 4, 8
+    lat = torch.tensor([-60.0, -20.0, 20.0, 60.0])
+    area = torch.ones(nlat, nlon, device=get_device())
+    config = LossConfig(
+        type="MSE",
+        global_mean_type="LpLoss",
+        latitude_weighting=LatitudeWeightingConfig(amplitude=2.0),
+    )
+    loss = config.build(LatLonOperations(area), lat=lat)
+    x = torch.randn(2, 3, nlat, nlon, device=get_device())
+    y = torch.randn(2, 3, nlat, nlon, device=get_device()) + 1.0
+    components = loss(x, y)
+    assert len(components) == 2

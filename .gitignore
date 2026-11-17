@@ -143,3 +143,8 @@ scratch/
 scripts/data_process/.nfs*
 
 joblogs/
+
+scripts/wg_testing/train/archive
+scripts/wg_testing/eval/archive
+configs/wg_testing/train/archive
+configs/wg_testing/eval/archive

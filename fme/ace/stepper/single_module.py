@@ -893,11 +893,17 @@ class Stepper:
             operations, loss variable names, and channel dimension.
         """
         loss_normalizer = self._step_obj.get_loss_normalizer()
+        lat = (
+            self._dataset_info.lat_1d
+            if loss_config.latitude_weighting is not None
+            else None
+        )
         return loss_config.build(
             self._dataset_info.gridded_operations,
             out_names=self.loss_names,
             channel_dim=self.CHANNEL_DIM,
             normalizer=loss_normalizer,
+            lat=lat,
         )
 
     @property
